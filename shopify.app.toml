@@ -1,0 +1,71 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "32d09f5b59a2624cec6d15e66fd84988"
+application_url = "https://example.com"
+embedded = true
+name = "Barcode Studio"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_products,write_products,read_inventory"
+
+# NOTE: the Shopify CLI used here rejects the declarative [product_variant.metafields.app.*]
+# sections ("Unsupported section(s): product_variant"). These definitions are instead
+# created at install time via metafieldDefinitionCreate in the afterAuth hook
+# (app/shopify.server.ts). Original sections preserved in shopify.app.toml.bak.
+# [product_variant.metafields.app.pacific_smoke_sku]
+# name = "Pacific Smoke SKU"
+# description = "Pacific Smoke SKU assigned by Barcode Studio"
+# type = "single_line_text_field"
+# access.admin = "merchant_read_write"
+
+# [product_variant.metafields.app.valor_sku]
+# name = "Valor SKU"
+# description = "Valor SKU assigned by Barcode Studio"
+# type = "single_line_text_field"
+# access.admin = "merchant_read_write"
+
+[webhooks]
+api_version = "2027-01"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/products/create"
+  topics = [ "products/create" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/products/update"
+  topics = [ "products/update" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/products/delete"
+  topics = [ "products/delete" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/bulk_operations/finish"
+  topics = [ "bulk_operations/finish" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/customers/data_request"
+  compliance_topics = [ "customers/data_request" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/customers/redact"
+  compliance_topics = [ "customers/redact" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/shop/redact"
+  compliance_topics = [ "shop/redact" ]
+
+[auth]
+redirect_urls = [ "https://example.com/api/auth" ]
+
+[build]
+automatically_update_urls_on_dev = true

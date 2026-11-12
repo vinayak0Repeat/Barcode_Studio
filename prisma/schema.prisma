@@ -1,0 +1,254 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+
+  @@index([shop])
+}
+
+model Shop {
+  id        String   @id // shop domain, e.g. store.myshopify.com
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  settings       Setting[]
+  counters       Counter[]
+  labelSizes     LabelSize[]
+  templates      LabelTemplate[]
+  printJobs      PrintJob[]
+  activities     Activity[]
+  cachedProducts CachedProduct[]
+  cachedVariants CachedVariant[]
+  syncState      SyncState?
+  jobRuns        JobRun[]
+}
+
+model Setting {
+  shopId String
+  key    String
+  value  Json
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@id([shopId, key])
+}
+
+model Counter {
+  shopId  String
+  key     String // barcode, sku.ps, sku.valor, sku.internal, printjob
+  prefix  String
+  padding Int    @default(6)
+  next    Int    @default(1)
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@id([shopId, key])
+}
+
+model LabelSize {
+  id           String  @id @default(cuid())
+  shopId       String
+  name         String
+  sequence     Int     @default(0)
+  active       Boolean @default(true)
+  widthMm      Float
+  heightMm     Float
+  marginTop    Float   @default(2)
+  marginRight  Float   @default(2)
+  marginBottom Float   @default(2)
+  marginLeft   Float   @default(2)
+  gapXmm       Float   @default(2)
+  gapYmm       Float   @default(2)
+  columns      Int     @default(1)
+  rows         Int     @default(1)
+
+  shop      Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  templates LabelTemplate[]
+
+  @@unique([shopId, name])
+}
+
+model LabelTemplate {
+  id                  String  @id @default(cuid())
+  shopId              String
+  name                String
+  sequence            Int     @default(0)
+  active              Boolean @default(true)
+  sizeId              String
+  barcodeType         String  @default("code128")
+  layout              String  @default("sheet") // sheet | dymo
+  showProductName     Boolean @default(true)
+  showVariantName     Boolean @default(true)
+  showSku             Boolean @default(true)
+  showPrice           Boolean @default(true)
+  showBarcodeText     Boolean @default(true)
+  fontSize            Float   @default(10)
+  // Per-element overrides; 0 = automatic
+  nameFontSize        Float   @default(0)
+  skuFontSize         Float   @default(0)
+  priceFontSize       Float   @default(0)
+  barcodeTextFontSize Float   @default(0)
+  barcodeWidthPct     Float   @default(0)
+  barcodeHeightPct    Float   @default(0)
+
+  shop      Shop       @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  size      LabelSize  @relation(fields: [sizeId], references: [id])
+  printJobs PrintJob[]
+
+  @@unique([shopId, name])
+}
+
+model PrintJob {
+  id           String   @id @default(cuid())
+  shopId       String
+  name         String
+  staffId      String?
+  staffName    String?
+  printedAt    DateTime @default(now())
+  templateId   String?
+  templateSnap Json?
+  sizeSnap     Json?
+  productCount Int      @default(0)
+  lineCount    Int      @default(0)
+  labelCount   Int      @default(0)
+  state        String   @default("printed")
+  pdfKey       String?
+
+  shop            Shop           @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  lines           PrintJobLine[]
+  labelTemplate   LabelTemplate? @relation(fields: [labelTemplateId], references: [id])
+  labelTemplateId String?
+
+  @@index([shopId, printedAt])
+}
+
+model PrintJobLine {
+  id          String  @id @default(cuid())
+  jobId       String
+  variantGid  String
+  productGid  String
+  productName String?
+  sku         String?
+  barcode     String?
+  price       String?
+  quantity    Int     @default(1)
+
+  job PrintJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+}
+
+model Activity {
+  id           String   @id @default(cuid())
+  shopId       String
+  type         String // generated | resolved | printed | sku_generated
+  at           DateTime @default(now())
+  staffId      String?
+  productCount Int      @default(0)
+  labelCount   Int      @default(0)
+  jobId        String?
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, at])
+}
+
+model CachedProduct {
+  id               String    @id // `${shopId}:${gid}`
+  shopId           String
+  gid              String
+  title            String?
+  status           String?
+  createdAt        DateTime  @default(now())
+  updatedAtShopify DateTime?
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, gid])
+}
+
+model CachedVariant {
+  id                String    @id // `${shopId}:${gid}`
+  shopId            String
+  gid               String
+  productGid        String
+  title             String?
+  sku               String?
+  barcode           String?
+  barcodes          Json?
+  psSku             String?
+  valorSku          String?
+  price             String?
+  compareAtPrice    String?
+  inventoryQuantity Int?
+  options           Json?
+  status            String?
+  createdAt         DateTime  @default(now())
+  updatedAtShopify  DateTime?
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, gid])
+  @@index([shopId, productGid])
+  // Deliberately NOT unique: Shopify allows duplicate barcodes/SKUs;
+  // the app enforces uniqueness in code.
+  @@index([shopId, barcode])
+  @@index([shopId, sku])
+  @@index([shopId, psSku])
+  @@index([shopId, valorSku])
+}
+
+model SyncState {
+  shopId                String    @id
+  status                String    @default("idle")
+  lastFullSyncAt        DateTime?
+  lastIncrementalSyncAt DateTime?
+  updatedAt             DateTime  @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+}
+
+model JobRun {
+  id            String   @id @default(cuid())
+  shopId        String
+  type          String
+  status        String   @default("pending")
+  params        Json?
+  progressDone  Int      @default(0)
+  progressTotal Int      @default(0)
+  error         String?
+  result        Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, createdAt])
+}
