@@ -117,8 +117,26 @@ export async function seedShop(shopId: string) {
     });
   }
 
-  // 4. Counters (these are the settings defaults for now;
-  //     additional key/value defaults can be added to the Setting model later)
+  // 4. Barcode Settings (idempotent: never overwrite existing rows)
+  const settings: Array<{ key: string; value: string | number | boolean }> = [
+    { key: "barcodePrefix", value: "99" },
+    { key: "barcodeLength", value: 12 },
+    { key: "barcodeType", value: "code128" },
+    { key: "autoGenerate", value: false },
+  ];
+  for (const setting of settings) {
+    await prisma.setting.upsert({
+      where: { shopId_key: { shopId, key: setting.key } },
+      update: {},
+      create: {
+        shopId,
+        key: setting.key,
+        value: setting.value as unknown as object,
+      },
+    });
+  }
+
+  // 5. Counters
   const counters: Array<{
     key: string;
     prefix: string;

@@ -46,6 +46,7 @@ model Shop {
   activities     Activity[]
   cachedProducts CachedProduct[]
   cachedVariants CachedVariant[]
+  burnedValues   BurnedValue[]
   syncState      SyncState?
   jobRuns        JobRun[]
 }
@@ -223,6 +224,20 @@ model CachedVariant {
   @@index([shopId, sku])
   @@index([shopId, psSku])
   @@index([shopId, valorSku])
+}
+
+model BurnedValue {
+  id        String   @id @default(cuid())
+  shopId    String
+  kind      String // "barcode"
+  value     String
+  reason    String?
+  createdAt DateTime @default(now())
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, kind, value])
+  @@index([shopId, kind])
 }
 
 model SyncState {
