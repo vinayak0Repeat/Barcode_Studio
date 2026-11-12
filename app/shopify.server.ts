@@ -8,6 +8,7 @@ import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prism
 import prisma from "./db.server";
 import { seedShop } from "./services/seed.server";
 import { ensureVariantMetafieldDefinitions } from "./services/metafield-definitions.server";
+import { fullSync } from "./services/catalog/sync.server";
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
@@ -25,7 +26,30 @@ const shopify = shopifyApp({
     // Runs on install and on every re-auth; seedShop is idempotent.
     afterAuth: async ({ session, admin }) => {
       await seedShop(session.shop);
-      await ensureVariantMetafieldDefinitions(admin);
+
+      if (process.env.ENABLE_VARIANT_METAFIELD_DEFINITIONS === "true") {
+        await ensureVariantMetafieldDefinitions(admin);
+      }
+
+      // First-install catalog sync: fire-and-forget, never blocks auth.
+      try {
+        const syncState = await prisma.syncState.findUnique({
+          where: { shopId: session.shop },
+        });
+        if (!syncState?.lastFullSyncAt) {
+          fullSync(session.shop, admin).catch((error) => {
+            console.error(
+              `Initial catalog sync failed for ${session.shop}:`,
+              error,
+            );
+          });
+        }
+      } catch (error) {
+        console.error(
+          `Could not check sync state for ${session.shop}:`,
+          error,
+        );
+      }
     },
   },
   ...(process.env.SHOP_CUSTOM_DOMAIN
