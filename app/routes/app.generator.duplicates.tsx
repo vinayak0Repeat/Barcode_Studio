@@ -107,6 +107,15 @@ export default function DuplicatesPage() {
             : `${loaderData.groups.length} duplicated value(s)`
         }
       >
+        {loaderData.groups.length === 0 && (
+          <s-paragraph>
+            <s-text tone="subdued">
+              All good — every active variant has a unique barcode. Duplicates
+              are only computed over active products; archived variants can
+              still block value reuse.
+            </s-text>
+          </s-paragraph>
+        )}
         {result && (
           <s-banner tone={result.ok ? "success" : "critical"}>
             {result.message}
@@ -134,7 +143,7 @@ export default function DuplicatesPage() {
                     </s-table-cell>
                     <s-table-cell>
                       {index === 0 ? (
-                        <s-badge tone="success">Keeps barcode (oldest)</s-badge>
+                        <s-badge tone="success">Keeps this barcode (oldest)</s-badge>
                       ) : (
                         <s-button
                           variant="tertiary"

@@ -12,6 +12,7 @@ export interface Level1Result {
     gid: string;
     title: string | null;
     productType: string | null;
+    vendor: string | null;
     image: string | null;
     variantCount: number;
     totalInventory: number | null;
@@ -101,8 +102,9 @@ export async function level1(
     return {
       gid: product.gid,
       title: product.title,
-      productType: null, // not cached on the product row (see schema)
-      image: null, // featured image not cached in step 2 schema
+      productType: product.productType,
+      vendor: product.vendor,
+      image: product.imageUrl,
       variantCount: productVariants.length,
       totalInventory:
         inventories.length > 0
@@ -169,6 +171,9 @@ export interface VariantRow {
   variantGid: string;
   productGid: string;
   productTitle: string | null;
+  productType: string | null;
+  vendor: string | null;
+  imageUrl: string | null;
   variantTitle: string | null;
   sku: string | null;
   barcode: string | null;
@@ -192,9 +197,9 @@ export async function variantRows(
 
   const products = await prisma.cachedProduct.findMany({
     where: shopId ? { shopId } : undefined,
-    select: { gid: true, title: true },
+    select: { gid: true, title: true, productType: true, vendor: true, imageUrl: true },
   });
-  const titleByGid = new Map(products.map((p) => [p.gid, p.title]));
+  const productByGid = new Map(products.map((p) => [p.gid, p]));
 
   const variantWhere = needle
     ? {
@@ -227,22 +232,28 @@ export async function variantRows(
   ]);
 
   return {
-    rows: variants.map((variant) => ({
-      variantGid: variant.gid,
-      productGid: variant.productGid,
-      productTitle: titleByGid.get(variant.productGid) ?? null,
-      variantTitle: variant.title,
-      sku: variant.sku,
-      barcode: variant.barcode,
-      price: variant.price,
-      inventoryQuantity: variant.inventoryQuantity,
-      matched: matchesQuery(needle, {
-        productTitle: titleByGid.get(variant.productGid) ?? null,
-        displayName: variant.title,
+    rows: variants.map((variant) => {
+      const product = productByGid.get(variant.productGid);
+      return {
+        variantGid: variant.gid,
+        productGid: variant.productGid,
+        productTitle: product?.title ?? null,
+        productType: product?.productType ?? null,
+        vendor: product?.vendor ?? null,
+        imageUrl: product?.imageUrl ?? null,
+        variantTitle: variant.title,
         sku: variant.sku,
         barcode: variant.barcode,
-      }),
-    })),
+        price: variant.price,
+        inventoryQuantity: variant.inventoryQuantity,
+        matched: matchesQuery(needle, {
+          productTitle: product?.title ?? null,
+          displayName: variant.title,
+          sku: variant.sku,
+          barcode: variant.barcode,
+        }),
+      };
+    }),
     total,
   };
 }

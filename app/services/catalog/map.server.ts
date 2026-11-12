@@ -39,6 +39,9 @@ export interface MappedProduct {
   gid: string;
   title: string | null;
   status: string | null;
+  imageUrl: string | null;
+  productType: string | null;
+  vendor: string | null;
   createdAt: Date;
   updatedAtShopify: Date;
 }
@@ -73,6 +76,9 @@ export function mapProduct(
     gid: product.id,
     title: product.title ?? null,
     status: product.status ?? null,
+    imageUrl: product.featuredImage?.url ?? null,
+    productType: product.productType ?? null,
+    vendor: product.vendor ?? null,
     createdAt: new Date(product.createdAt),
     updatedAtShopify: new Date(product.updatedAt),
   };

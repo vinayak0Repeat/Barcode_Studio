@@ -187,6 +187,9 @@ model CachedProduct {
   gid              String
   title            String?
   status           String?
+  imageUrl         String?
+  productType      String?
+  vendor           String?
   createdAt        DateTime  @default(now())
   updatedAtShopify DateTime?
 

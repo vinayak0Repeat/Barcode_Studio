@@ -8,9 +8,10 @@ import { data, useFetcher, useLoaderData, useRevalidator, useSearchParams } from
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { variantRows } from "../services/catalog/search.server";
-import { statusCounts } from "../services/barcode/status.server";
+import { statusCounts, duplicateMap } from "../services/barcode/status.server";
 import {
   generateForVariants,
+  getBarcodeConfig,
   setBarcode,
   validateAll,
 } from "../services/barcode/engine.server";
@@ -23,26 +24,27 @@ const PAGE_SIZE = 25;
 /** Intentionally disabled (mirrors the Odoo module). Engine support exists. */
 const FEATURE_GENERATE_ALL_MISSING = false;
 
+type Filter = "all" | "missing" | "has" | "duplicate";
+
+interface ActionResult {
+  ok: boolean;
+  message: string;
+  issues?: Array<{ gid: string; barcode: string; issues: string[] }>;
+}
+
 /** s-modal element API (verified in @shopify/polaris-types BaseOverlayMethods). */
 interface PolarisActiveModalElement extends HTMLElement {
   showOverlay: () => void;
   hideOverlay: () => void;
 }
-
 const PREVIEW_MODAL_ID = "barcode-preview-modal";
 const EDIT_MODAL_ID = "barcode-edit-modal";
-
 function showModal(id: string) {
-  const element = document.getElementById(id) as PolarisActiveModalElement | null;
-  element?.showOverlay();
+  (document.getElementById(id) as PolarisActiveModalElement | null)?.showOverlay();
 }
-
 function hideModal(id: string) {
-  const element = document.getElementById(id) as PolarisActiveModalElement | null;
-  element?.hideOverlay();
+  (document.getElementById(id) as PolarisActiveModalElement | null)?.hideOverlay();
 }
-
-type Filter = "all" | "missing" | "has" | "duplicate";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -52,16 +54,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const filter = (url.searchParams.get("filter") ?? "all") as Filter;
   const page = Math.max(0, Number(url.searchParams.get("page") ?? "0") || 0);
 
-  // Statuses needed for filter/duplicate display: one grouped SQL query.
-  const { duplicateMap } = await import("../services/barcode/status.server");
-  const duplicates = await duplicateMap(shopId);
+  const [duplicates, counts, config] = await Promise.all([
+    duplicateMap(shopId),
+    statusCounts(shopId),
+    getBarcodeConfig(shopId),
+  ]);
 
-  const { rows, total } = await variantRows(shopId, {
-    q,
-    limit: 1000, // fetch enough to filter by status client-side in the loader
-    offset: 0,
-  });
-
+  const { rows } = await variantRows(shopId, { q, limit: 1000, offset: 0 });
   const annotated = rows.map((row) => ({
     ...row,
     status: !row.barcode
@@ -80,8 +79,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           ? annotated.filter((r) => r.status !== "missing")
           : annotated.filter((r) => r.status === "duplicate");
 
-  const [counts, runningJob, lastJob] = await Promise.all([
-    statusCounts(shopId),
+  const [runningJob, lastJob] = await Promise.all([
     prisma.jobRun.findFirst({
       where: { shopId, type: { in: ["barcode_generate", "barcode_resolve"] }, status: "running" },
       orderBy: { createdAt: "desc" },
@@ -92,31 +90,24 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }),
   ]);
 
-  const paged = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
-
   return {
-    rows: paged,
+    rows: filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
+    matchingGids: filtered.map((r) => r.variantGid),
+    matchingMissingGids: filtered.filter((r) => r.status === "missing").map((r) => r.variantGid),
     total: filtered.length,
     page,
     pageCount: Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)),
     q,
     filter,
     counts,
+    barcodeType: config.type,
+    barcodeLength: config.length,
     runningJob: runningJob
       ? { id: runningJob.id, type: runningJob.type, done: runningJob.progressDone, total: runningJob.progressTotal }
       : null,
-    lastJob: lastJob
-      ? { id: lastJob.id, status: lastJob.status, error: lastJob.error }
-      : null,
-    barcodeType: "code128",
+    lastJob: lastJob ? { id: lastJob.id, status: lastJob.status, error: lastJob.error } : null,
   };
 };
-
-interface ActionResult {
-  ok: boolean;
-  message: string;
-  issues?: Array<{ gid: string; barcode: string; issues: string[] }>;
-}
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
@@ -175,16 +166,24 @@ export default function GeneratorPage() {
   const revalidator = useRevalidator();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [preview, setPreview] = useState<{ value: string; svg: string } | null>(
-    null,
-  );
+  const [banner, setBanner] = useState<ActionResult | null>(null);
+  const [preview, setPreview] = useState<{
+    value: string;
+    svg: string;
+    title: string;
+  } | null>(null);
   const [editing, setEditing] = useState<{
     gid: string;
     value: string;
     error: string | null;
   } | null>(null);
+
   const busy = fetcher.state !== "idle";
-  const result = fetcher.data ?? null;
+
+  // Surface action results in the dismissible banner.
+  useEffect(() => {
+    if (fetcher.state === "idle" && fetcher.data) setBanner(fetcher.data);
+  }, [fetcher.state, fetcher.data]);
 
   useEffect(() => {
     if (!loaderData.runningJob) return;
@@ -192,8 +191,8 @@ export default function GeneratorPage() {
     return () => clearInterval(interval);
   }, [loaderData.runningJob, revalidator]);
 
-  // Close the edit modal + revalidate after a successful "set"; on failure
-  // keep it open and surface the error inside the modal.
+  // Close the edit modal after a successful "set"; on failure keep it open
+  // and show the error inside the modal.
   useEffect(() => {
     if (!editing || fetcher.state !== "idle" || !fetcher.data) return;
     if (fetcher.formData?.get("intent") !== "set") return;
@@ -202,9 +201,7 @@ export default function GeneratorPage() {
       setEditing(null);
       revalidator.revalidate();
     } else {
-      setEditing((prev) =>
-        prev ? { ...prev, error: fetcher.data!.message } : prev,
-      );
+      setEditing((prev) => (prev ? { ...prev, error: fetcher.data!.message } : prev));
     }
   }, [fetcher.state, fetcher.data, fetcher.formData, editing, revalidator]);
 
@@ -227,20 +224,38 @@ export default function GeneratorPage() {
     });
   };
 
+  const pageGids = loaderData.rows.map((r) => r.variantGid);
+  const allPageSelected =
+    pageGids.length > 0 && pageGids.every((gid) => selected.has(gid));
+  const selectAllPage = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const gid of pageGids) next.add(gid);
+      return next;
+    });
+  };
+  const selectedOnPage = loaderData.rows.filter((row) => selected.has(row.variantGid));
   const selectedMissing = loaderData.rows.filter(
     (row) => selected.has(row.variantGid) && row.status === "missing",
   );
 
-  const submitGenerate = () => {
+  const submitGenerate = (gids: string[]) => {
+    if (gids.length === 0) return;
     const form = new FormData();
     form.set("intent", "generate");
-    for (const row of selectedMissing) form.append("gids", row.variantGid);
+    for (const gid of gids) form.append("gids", gid);
     fetcher.submit(form, { method: "POST" });
   };
 
-  const openPreview = async (barcode: string) => {
-    // Fetch the SVG with session credentials (iframe-safe, unlike <img src>)
-    // and render it inline.
+  const copyValue = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      // clipboard unavailable in some iframe contexts; ignore silently
+    }
+  };
+
+  const openPreview = async (barcode: string, title: string) => {
     let svg = "";
     try {
       const response = await fetch(
@@ -251,7 +266,7 @@ export default function GeneratorPage() {
     } catch {
       svg = "";
     }
-    setPreview({ value: barcode, svg });
+    setPreview({ value: barcode, svg, title });
     showModal(PREVIEW_MODAL_ID);
   };
 
@@ -268,8 +283,6 @@ export default function GeneratorPage() {
     form.set("gid", editing.gid);
     form.set("value", editing.value);
     fetcher.submit(form, { method: "POST" });
-    // Modal stays open; the effect above closes it on success or shows the
-    // error inside it on failure.
   };
 
   const submitValidate = () => {
@@ -278,9 +291,49 @@ export default function GeneratorPage() {
     fetcher.submit(form, { method: "POST" });
   };
 
+  const hasFilters = loaderData.filter !== "all" || Boolean(loaderData.q);
+
   return (
     <s-page heading="Barcode Generator">
-      <s-section heading="Variants">
+      <s-section>
+        <s-paragraph>
+          {loaderData.counts.total} variants in cache · {loaderData.counts.ready} ready ·{" "}
+          {loaderData.counts.missing} missing · {loaderData.counts.duplicate} duplicate
+        </s-paragraph>
+        <s-stack direction="inline" gap="base">
+          <s-button
+            variant="primary"
+            onClick={() => submitGenerate(loaderData.matchingMissingGids.filter((gid) => selected.has(gid)))}
+            title={
+              selectedMissing.length === 0
+                ? "Select variants without a barcode"
+                : `Generate for ${selectedMissing.length} variant(s)`
+            }
+            {...(busy || selectedMissing.length === 0 ? { disabled: true } : {})}
+          >
+            Generate barcodes{selectedMissing.length > 0 ? ` (${selectedMissing.length})` : ""}
+          </s-button>
+          <s-button variant="secondary" onClick={submitValidate} {...(busy ? { disabled: true } : {})}>
+            Validate all
+          </s-button>
+          {FEATURE_GENERATE_ALL_MISSING ? (
+            <s-button
+              variant="secondary"
+              onClick={() => submitGenerate(loaderData.matchingMissingGids)}
+            >
+              Generate all missing
+            </s-button>
+          ) : null}
+        </s-stack>
+        <s-stack direction="inline" gap="base">
+          <s-link href="/app/generator/duplicates">Duplicates</s-link>
+          <s-link href="/app/generator/missing">Missing report</s-link>
+          <s-link href="/app/reports">Reports</s-link>
+        </s-stack>
+      </s-section>
+
+      {/* Filters */}
+      <s-section>
         <s-stack direction="inline" gap="base">
           {(["all", "missing", "has", "duplicate"] as Filter[]).map((f) => (
             <s-button
@@ -297,33 +350,21 @@ export default function GeneratorPage() {
                     : `Duplicate (${loaderData.counts.duplicate})`}
             </s-button>
           ))}
-          <s-button
-            onClick={() =>
-              navigateWith({ q: prompt("Search product, variant, SKU or barcode") ?? null })
-            }
-          >
-            Search
-          </s-button>
-          {loaderData.q && <s-badge>q: {loaderData.q}</s-badge>}
-        </s-stack>
-
-        <s-stack direction="inline" gap="base">
-          <s-button
-            onClick={submitGenerate}
-            {...(busy || selectedMissing.length === 0 ? { disabled: true } : {})}
-          >
-            Generate barcodes ({selectedMissing.length})
-          </s-button>
-          <s-button variant="tertiary" onClick={submitValidate} {...(busy ? { disabled: true } : {})}>
-            Validate all
-          </s-button>
-          <s-link href="/app/generator/duplicates">Duplicates</s-link>
-          <s-link href="/app/generator/missing">Missing report</s-link>
-          {FEATURE_GENERATE_ALL_MISSING ? (
-            <s-button variant="tertiary" onClick={submitValidate}>
-              Generate all missing
+          <input
+            type="search"
+            aria-label="Search product, variant, SKU or barcode"
+            placeholder="Search product, variant, SKU or barcode"
+            defaultValue={loaderData.q}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") navigateWith({ q: event.currentTarget.value || null });
+            }}
+            style={{ minWidth: 260 }}
+          />
+          {hasFilters && (
+            <s-button variant="tertiary" onClick={() => navigateWith({ q: null, filter: null })}>
+              Clear filters
             </s-button>
-          ) : null}
+          )}
         </s-stack>
 
         {loaderData.runningJob && (
@@ -332,29 +373,65 @@ export default function GeneratorPage() {
             {loaderData.runningJob.total || "?"}
           </s-banner>
         )}
-        {result && (
-          <s-banner tone={result.ok ? "success" : "critical"}>
-            {result.message}
-            {result.ok &&
-              result.issues != null &&
-              result.issues.length > 0 &&
-              result.issues.map((issue) => (
+        {banner && (
+          <s-banner tone={banner.ok ? "success" : "critical"}>
+            {banner.message}
+            {banner.ok &&
+              banner.issues != null &&
+              banner.issues.length > 0 &&
+              banner.issues.map((issue) => (
                 <s-paragraph key={issue.gid}>
                   {issue.barcode}: {issue.issues.join("; ")}
                 </s-paragraph>
               ))}
+            <s-button variant="tertiary" onClick={() => setBanner(null)}>
+              Dismiss
+            </s-button>
           </s-banner>
         )}
-        {!result && loaderData.lastJob?.status === "degraded" && (
+        {!banner && loaderData.lastJob?.status === "degraded" && (
           <s-banner tone="warning">
-            Last job degraded: {loaderData.lastJob.error} (affected variants kept
-            their values burned; see JobRun)
+            Last job degraded: {loaderData.lastJob.error} (affected values were burned; see JobRun)
           </s-banner>
+        )}
+
+        {/* Bulk bar */}
+        {selected.size > 0 && (
+          <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+            <s-stack direction="inline" gap="base">
+              <s-text>
+                {selected.size} selected, {selectedMissing.length} without barcode
+              </s-text>
+              <s-button
+                variant="primary"
+                onClick={() =>
+                  submitGenerate(loaderData.matchingMissingGids.filter((gid) => selected.has(gid)))
+                }
+                {...(busy || selectedMissing.length === 0 ? { disabled: true } : {})}
+              >
+                Generate
+              </s-button>
+              <s-button variant="tertiary" onClick={() => setSelected(new Set())}>
+                Clear selection
+              </s-button>
+            </s-stack>
+          </s-box>
         )}
 
         <s-table>
           <s-table-header-row>
-            <s-table-header>Select</s-table-header>
+            <s-table-header>
+              <input
+                type="checkbox"
+                aria-label="Select all on this page"
+                checked={allPageSelected}
+                onChange={() =>
+                  allPageSelected
+                    ? setSelected(new Set())
+                    : selectAllPage()
+                }
+              />
+            </s-table-header>
             <s-table-header>Product</s-table-header>
             <s-table-header>Variant</s-table-header>
             <s-table-header>SKU</s-table-header>
@@ -370,15 +447,58 @@ export default function GeneratorPage() {
                 <s-table-cell>
                   <input
                     type="checkbox"
+                    aria-label={`Select ${row.productTitle ?? "product"} ${row.variantTitle ?? ""}`}
                     checked={selected.has(row.variantGid)}
                     onChange={() => toggle(row.variantGid)}
                   />
                 </s-table-cell>
-                <s-table-cell>{row.productTitle ?? "—"}</s-table-cell>
+                <s-table-cell>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {row.imageUrl ? (
+                      <img
+                        src={row.imageUrl}
+                        alt=""
+                        loading="lazy"
+                        style={{ width: 32, height: 32, objectFit: "cover", borderRadius: 4 }}
+                      />
+                    ) : (
+                      <span
+                        aria-hidden="true"
+                        style={{
+                          display: "inline-block",
+                          width: 32,
+                          height: 32,
+                          borderRadius: 4,
+                          background: "#f0f0f0",
+                          border: "1px solid #e0e0e0",
+                        }}
+                      />
+                    )}
+                    <span>
+                      {row.productTitle ?? "—"}
+                      {row.productType && (
+                        <small style={{ display: "block", color: "#8a8a8a" }}>{row.productType}</small>
+                      )}
+                    </span>
+                  </div>
+                </s-table-cell>
                 <s-table-cell>{row.variantTitle ?? "—"}</s-table-cell>
                 <s-table-cell>{row.sku ?? "—"}</s-table-cell>
                 <s-table-cell>
-                  {row.barcode ?? <s-badge tone="warning">Missing</s-badge>}
+                  {row.barcode ? (
+                    <s-stack direction="inline" gap="base">
+                      <span style={{ fontFamily: "monospace" }}>{row.barcode}</span>
+                      <s-button
+                        variant="tertiary"
+                        onClick={() => copyValue(row.barcode!)}
+                        aria-label="Copy barcode"
+                      >
+                        Copy
+                      </s-button>
+                    </s-stack>
+                  ) : (
+                    <span style={{ color: "#8a8a8a" }}>Missing</span>
+                  )}
                 </s-table-cell>
                 <s-table-cell>
                   {row.status === "ready" && <s-badge tone="success">Ready</s-badge>}
@@ -391,24 +511,36 @@ export default function GeneratorPage() {
                   <s-stack direction="inline" gap="base">
                     <s-button
                       variant="tertiary"
-                      onClick={() => row.barcode && openPreview(row.barcode)}
+                      onClick={() => row.barcode && openPreview(row.barcode, `${row.productTitle ?? ""} ${row.variantTitle ?? ""}`.trim())}
                       {...(row.barcode ? {} : { disabled: true })}
                     >
                       Preview
                     </s-button>
-                    <s-button
-                      variant="tertiary"
-                      onClick={() => openEdit(row.variantGid, row.barcode)}
-                    >
+                    <s-button variant="tertiary" onClick={() => openEdit(row.variantGid, row.barcode)}>
                       Edit
                     </s-button>
+                    {row.status === "missing" && (
+                      <s-button
+                        variant="tertiary"
+                        onClick={() => submitGenerate([row.variantGid])}
+                        {...(busy ? { loading: true } : {})}
+                      >
+                        Generate
+                      </s-button>
+                    )}
                   </s-stack>
                 </s-table-cell>
               </s-table-row>
             ))}
             {loaderData.rows.length === 0 && (
               <s-table-row>
-                <s-table-cell>No variants match.</s-table-cell>
+                <s-table-cell>
+                  {loaderData.filter === "missing"
+                    ? "No missing barcodes. Every matching variant is covered."
+                    : loaderData.filter === "duplicate"
+                      ? "No duplicate barcodes among active products."
+                      : "No variants match. Run a sync from the Dashboard or clear the filters."}
+                </s-table-cell>
               </s-table-row>
             )}
           </s-table-body>
@@ -416,33 +548,44 @@ export default function GeneratorPage() {
 
         {loaderData.pageCount > 1 && (
           <s-stack direction="inline" gap="base">
-            <s-button variant="tertiary" onClick={() => navigateWith({ page: String(loaderData.page - 1) })}>
+            <s-button
+              variant="tertiary"
+              onClick={() => navigateWith({ page: String(loaderData.page - 1) })}
+              {...(loaderData.page === 0 ? { disabled: true } : {})}
+            >
               Previous
             </s-button>
             <s-paragraph>
               Page {loaderData.page + 1} of {loaderData.pageCount}
             </s-paragraph>
-            <s-button variant="tertiary" onClick={() => navigateWith({ page: String(loaderData.page + 1) })}>
+            <s-button
+              variant="tertiary"
+              onClick={() => navigateWith({ page: String(loaderData.page + 1) })}
+              {...(loaderData.page >= loaderData.pageCount - 1 ? { disabled: true } : {})}
+            >
               Next
             </s-button>
           </s-stack>
         )}
+        {selectedOnPage.length > 0 && selected.size < loaderData.matchingGids.length && (
+          <s-button
+            variant="tertiary"
+            onClick={() => setSelected(new Set(loaderData.matchingGids))}
+          >
+            Select all {loaderData.matchingGids.length} matching filter
+          </s-button>
+        )}
       </s-section>
 
-      {/* Modals are always mounted and opened imperatively via showOverlay()
-          (verified in @shopify/polaris-types BaseOverlayMethods); Polaris
-          s-modal has no `open` prop. */}
-      <s-modal
-        id={PREVIEW_MODAL_ID}
-        heading="Barcode preview"
-        onHide={() => setPreview(null)}
-      >
+      {/* Preview modal */}
+      <s-modal id={PREVIEW_MODAL_ID} heading="Barcode preview" onHide={() => setPreview(null)}>
         {preview && (
           <>
+            <s-paragraph>
+              <s-text tone="subdued">{preview.title}</s-text>
+            </s-paragraph>
             {preview.svg ? (
               <div
-                // Fixed, sane preview box: white background regardless of
-                // dark mode, light border, never full-modal size.
                 style={{
                   backgroundColor: "#ffffff",
                   border: "1px solid #e0e0e0",
@@ -461,20 +604,18 @@ export default function GeneratorPage() {
             ) : (
               <s-paragraph>Could not render the barcode.</s-paragraph>
             )}
-            <s-paragraph>
-              <span style={{ color: "#000000", fontFamily: "monospace" }}>
-                {preview.value}
-              </span>
-            </s-paragraph>
+            <s-stack direction="inline" gap="base">
+              <span style={{ color: "#000000", fontFamily: "monospace" }}>{preview.value}</span>
+              <s-button variant="tertiary" onClick={() => copyValue(preview.value)}>
+                Copy value
+              </s-button>
+            </s-stack>
           </>
         )}
       </s-modal>
 
-      <s-modal
-        id={EDIT_MODAL_ID}
-        heading="Edit barcode"
-        onHide={() => setEditing(null)}
-      >
+      {/* Edit modal */}
+      <s-modal id={EDIT_MODAL_ID} heading="Edit barcode" onHide={() => setEditing(null)}>
         {editing && (
           <>
             <label>
@@ -483,16 +624,18 @@ export default function GeneratorPage() {
                 type="text"
                 value={editing.value}
                 onChange={(event) =>
-                  setEditing((prev) =>
-                    prev ? { ...prev, value: event.target.value } : prev,
-                  )
+                  setEditing((prev) => (prev ? { ...prev, value: event.target.value } : prev))
                 }
                 style={{ display: "block", marginTop: 4 }}
               />
             </label>
-            {editing.error && (
-              <s-banner tone="critical">{editing.error}</s-banner>
-            )}
+            <s-paragraph>
+              <s-text tone="subdued">
+                Type: {loaderData.barcodeType} · required length: {loaderData.barcodeLength}{" "}
+                characters. Values already used by another variant (any status) are rejected.
+              </s-text>
+            </s-paragraph>
+            {editing.error && <s-banner tone="critical">{editing.error}</s-banner>}
             <s-stack direction="inline" gap="base">
               <s-button onClick={submitSet} {...(busy ? { loading: true } : {})}>
                 Save

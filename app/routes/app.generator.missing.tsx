@@ -123,7 +123,9 @@ export default function MissingPage() {
             ))}
             {loaderData.rows.length === 0 && (
               <s-table-row>
-                <s-table-cell>No missing barcodes — all set.</s-table-cell>
+                <s-table-cell>
+                  No missing barcodes. Every active variant is covered — nice!
+                </s-table-cell>
               </s-table-row>
             )}
           </s-table-body>

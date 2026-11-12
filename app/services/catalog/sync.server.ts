@@ -130,15 +130,18 @@ async function runSync(
     for (const batch of chunk(products, SQL_BATCH_SIZE)) {
       await prisma.$executeRaw`
         INSERT INTO "CachedProduct"
-          ("id", "shopId", "gid", "title", "status", "createdAt", "updatedAtShopify")
+          ("id", "shopId", "gid", "title", "status", "imageUrl", "productType", "vendor", "createdAt", "updatedAtShopify")
         VALUES ${Prisma.join(
           batch.map(
-            (p) => Prisma.sql`(${p.id}, ${p.shopId}, ${p.gid}, ${p.title}, ${p.status}, ${p.createdAt}, ${p.updatedAtShopify})`,
+            (p) => Prisma.sql`(${p.id}, ${p.shopId}, ${p.gid}, ${p.title}, ${p.status}, ${p.imageUrl}, ${p.productType}, ${p.vendor}, ${p.createdAt}, ${p.updatedAtShopify})`,
           ),
         )}
         ON CONFLICT ("id") DO UPDATE SET
           "title" = EXCLUDED."title",
           "status" = EXCLUDED."status",
+          "imageUrl" = EXCLUDED."imageUrl",
+          "productType" = EXCLUDED."productType",
+          "vendor" = EXCLUDED."vendor",
           "updatedAtShopify" = EXCLUDED."updatedAtShopify"
       `;
     }

@@ -106,6 +106,9 @@ export async function refetchAndUpsertProduct(
         update: {
           title: mappedProduct.title,
           status: mappedProduct.status,
+          imageUrl: mappedProduct.imageUrl,
+          productType: mappedProduct.productType,
+          vendor: mappedProduct.vendor,
           updatedAtShopify: mappedProduct.updatedAtShopify,
         },
         create: mappedProduct,
