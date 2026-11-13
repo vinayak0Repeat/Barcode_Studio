@@ -120,7 +120,7 @@ export function countMissingSelected(
   let count = 0;
   for (const gid of selectedGids) {
     const barcode = barcodeByGid.get(gid);
-    if (barcode !== undefined && barcode === null) count += 1;
+    if (barcode !== undefined && (barcode === null || barcode.trim() === "")) count += 1;
   }
   return count;
 }

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ActionFunctionArgs,
+  LinksFunction,
   LoaderFunctionArgs,
   MetaFunction,
 } from "react-router";
@@ -9,7 +10,7 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { Prisma } from "@prisma/client";
 import { generateForVariants, getBarcodeConfig, setBarcode } from "../services/barcode/engine.server";
-import { fitLabel } from "../services/labels/fit";
+import { fitLabel } from "../services/labels/labelGeometry.shared";
 import { templateInputToToggles, templateLayoutToSheetMode } from "../services/labels/adminValidation.shared";
 import { getLabelDefault } from "../services/labels/adminSettings.server";
 import { formatPrice } from "../services/labels/formatPrice";
@@ -26,8 +27,6 @@ import {
   type QuantityMode,
 } from "../services/labels/quantities.shared";
 import {
-  ResponseCache,
-  buildPreviewKey,
   countMissingSelected,
   createStaleGuard,
   groupVariantsByProduct,
@@ -37,10 +36,17 @@ import {
   listProductsPage,
   type PrintLabelProduct,
 } from "../services/catalog/printLabels.server";
+import printStyles from "../styles/print-labels.css?url";
+import { barcodeStatuses } from "../services/barcode/status.server";
+import { validateValue } from "../services/barcode/validate.shared";
+import { barcodeLabelStatus } from "../services/barcode/status.shared";
+import { buildPreviewEntries, buildPreviewNotes, countPrintableLabels, previewPage, restorePrintSelection, shouldShowPreviewEmptyState, uniqueBarcodeUrls } from "../services/labels/previewStack.shared";
+import { barcodeEditFailure } from "../services/labels/barcodeEdit.shared";
 
 export const meta: MetaFunction = () => [
   { title: "Print Labels | Barcode Studio" },
 ];
+export const links: LinksFunction = () => [{ rel: "stylesheet", href: printStyles }];
 
 const PRODUCTS_PAGE_SIZE = 20; // products per page ("Load more" appends)
 type Filter = "all" | "has" | "missing";
@@ -87,8 +93,49 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const defaultSizeId = sizes.find((size) => size.id === configuredSizeId)?.id
     ?? sizes.find((size) => size.id === defaultTemplate?.sizeId)?.id ?? sizes[0]?.id ?? "";
 
+  // Job restoration is shop-scoped and uses the existing local cache only.
+  const restoreId = new URL(request.url).searchParams.get("job");
+  const restoreJob = restoreId ? await prisma.printJob.findFirst({ where: { id: restoreId, shopId }, include: { lines: true } }) : null;
+  let restore: null | { id: string; selection: Array<{ gid: string; quantity: number }>; variants: VariantDetail[]; products: PrintLabelProduct[]; sizeId: string; templateId: string; sheetMode: "roll" | "grid"; mode: QuantityMode; toggles: { showProductTitle: boolean; showVariantTitle: boolean; showSku: boolean; showPrice: boolean; showBarcodeText: boolean }; missing: number } = null;
+  if (restoreJob) {
+    const gids = [...new Set(restoreJob.lines.map((line) => line.variantGid))];
+    const cached = await prisma.cachedVariant.findMany({ where: { shopId, gid: { in: gids } }, select: { gid: true, productGid: true, title: true, sku: true, barcode: true, price: true, inventoryQuantity: true } });
+    const productGids = [...new Set(cached.map((row) => row.productGid))];
+    const [products, statuses] = await Promise.all([
+      prisma.cachedProduct.findMany({ where: { shopId, gid: { in: productGids } }, select: { gid: true, title: true, productType: true, imageUrl: true } }),
+      barcodeStatuses(shopId, cached.map((row) => row.gid)),
+    ]);
+    const productByGid = new Map(products.map((row) => [row.gid, row]));
+    const variants: VariantDetail[] = cached.map((row) => ({ ...row, barcodeStatus: statuses.get(row.gid) ?? "missing" }));
+    const restoredProducts: PrintLabelProduct[] = productGids.map((gid) => {
+      const rows = variants.filter((row) => row.productGid === gid); const product = productByGid.get(gid);
+      return { gid, title: product?.title ?? null, productType: product?.productType ?? null, imageUrl: product?.imageUrl ?? null,
+        variantCount: rows.length, withBarcode: rows.filter((row) => Boolean(row.barcode)).length,
+        stockSum: rows.reduce((sum, row) => sum + (row.inventoryQuantity ?? 0), 0), matchedVariantGids: [] };
+    });
+    const snap = (restoreJob.templateSnap ?? {}) as Record<string, unknown>;
+    const sizeSnap = (restoreJob.sizeSnap ?? {}) as Record<string, unknown>;
+    const savedToggles = snap.toggles && typeof snap.toggles === "object" ? snap.toggles as Record<string, unknown> : {};
+    const template = templates.find((row) => row.id === restoreJob.templateId) ?? defaultTemplate;
+    const restored = restorePrintSelection(restoreJob.lines, variants);
+    const selection = restored.selection;
+    restore = { id: restoreJob.id, selection, variants, products: restoredProducts,
+      sizeId: sizes.some((row) => row.id === sizeSnap.sizeId) ? String(sizeSnap.sizeId) : defaultSizeId,
+      templateId: template?.id ?? defaultTemplateId,
+      sheetMode: sizeSnap.sheetMode === "grid" ? "grid" : snap.layout === "dymo" ? "roll" : "grid",
+      mode: sizeSnap.quantityMode === "stock" ? "stock" : "fixed",
+      toggles: template ? {
+        showProductTitle: typeof savedToggles.showProductTitle === "boolean" ? savedToggles.showProductTitle : template.showProductName,
+        showVariantTitle: typeof savedToggles.showVariantTitle === "boolean" ? savedToggles.showVariantTitle : template.showVariantName,
+        showSku: typeof savedToggles.showSku === "boolean" ? savedToggles.showSku : template.showSku,
+        showPrice: typeof savedToggles.showPrice === "boolean" ? savedToggles.showPrice : template.showPrice,
+        showBarcodeText: typeof savedToggles.showBarcodeText === "boolean" ? savedToggles.showBarcodeText : template.showBarcodeText,
+      } : { showProductTitle: true, showVariantTitle: true, showSku: true, showPrice: false, showBarcodeText: true },
+      missing: restored.missing };
+  }
+
   return {
-    initialProducts: firstPage.products,
+    initialProducts: restore ? [...firstPage.products, ...restore.products.filter((row) => !firstPage.products.some((first) => first.gid === row.gid))] : firstPage.products,
     initialTotal: firstPage.total,
     sizes: sizes.map((s) => ({
       id: s.id,
@@ -129,6 +176,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     defaultSizeId,
     barcodeType: config.type,
     barcodeLength: config.length,
+    restore,
   };
 };
 
@@ -159,7 +207,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       await setBarcode(session.shop, admin, variantGid, value);
       return data({ ok: true, variantGid, barcode: value.trim(), message: "Barcode saved." } as ActionResult);
     } catch (error) {
-      return data({ ok: false, variantGid, message: error instanceof Error ? error.message : String(error) } as ActionResult, { status: 400 });
+      return data(barcodeEditFailure(variantGid, error) as ActionResult, { status: 400 });
     }
   }
 
@@ -382,7 +430,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 // Module-level caches: identical preview/barcode requests are never issued
 // twice within the session (P1 item 1).
-const previewCache = new ResponseCache();
 
 /** s-modal element API (verified in @shopify/polaris-types BaseOverlayMethods). */
 interface PolarisActiveModalElement extends HTMLElement {
@@ -419,8 +466,13 @@ export default function PrintLabelsPage() {
   const expandedBeforeSearch = useRef<Set<string> | null>(null);
 
   // ----- level 2 (P1 item 3: multiple expanded + cache keyed by product+q) -----
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [variantCache, setVariantCache] = useState<Record<string, VariantDetail[]>>({});
+  const [variantCache, setVariantCache] = useState<Record<string, VariantDetail[]>>(() => {
+    if (!loaderData.restore) return {};
+    const grouped = new Map<string, VariantDetail[]>();
+    for (const variant of loaderData.restore.variants) grouped.set(variant.productGid, [...(grouped.get(variant.productGid) ?? []), variant]);
+    return Object.fromEntries([...grouped].map(([gid, rows]) => [variantCacheKey(gid, ""), rows]));
+  });
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(loaderData.restore?.products.map((product) => product.gid) ?? []));
   const variantCacheRef = useRef(variantCache);
   variantCacheRef.current = variantCache;
   const [loadingVariantsFor, setLoadingVariantsFor] = useState<Set<string>>(new Set());
@@ -429,8 +481,10 @@ export default function PrintLabelsPage() {
   qRef.current = q;
 
   // ----- selection (keyed by gid, lives outside the list data) -----
-  const [selected, setSelected] = useState<Map<string, number>>(new Map());
-  const [barcodeByGid, setBarcodeByGid] = useState<Map<string, string | null>>(new Map());
+  const [selected, setSelected] = useState<Map<string, number>>(() => new Map(loaderData.restore?.selection.map(({ gid, quantity }) => [gid, quantity]) ?? []));
+  const quantityTouchedGids = useRef(new Set(loaderData.restore?.selection.map(({ gid }) => gid) ?? []));
+  const [barcodeByGid, setBarcodeByGid] = useState<Map<string, string | null>>(() => new Map(loaderData.restore?.variants.map((row) => [row.gid, row.barcode]) ?? []));
+  const [restoreNotice, setRestoreNotice] = useState<string | null>(() => loaderData.restore?.missing ? `Could not restore ${loaderData.restore.missing} variant(s) because they are no longer cached or have no barcode.` : null);
 
   // ----- banners / result -----
   const [result, setResult] = useState<ActionResult | null>(null);
@@ -445,97 +499,60 @@ export default function PrintLabelsPage() {
 
   // ----- print settings -----
   const initialTemplate = loaderData.templates.find((template) => template.id === loaderData.defaultTemplateId) ?? loaderData.templates[0];
-  const [sizeId, setSizeId] = useState(loaderData.defaultSizeId || initialTemplate?.sizeId || "");
-  const [templateId, setTemplateId] = useState(initialTemplate?.id ?? "");
-  const [mode, setMode] = useState<QuantityMode>("stock");
+  const [sizeId, setSizeId] = useState(loaderData.restore?.sizeId || loaderData.defaultSizeId || initialTemplate?.sizeId || "");
+  const [templateId, setTemplateId] = useState(loaderData.restore?.templateId || initialTemplate?.id || "");
+  const [mode, setMode] = useState<QuantityMode>(loaderData.restore?.mode ?? "stock");
   const [cappedQuantityGids, setCappedQuantityGids] = useState<Set<string>>(new Set());
   const [editingBarcode, setEditingBarcode] = useState<Record<string, string>>({});
   const [barcodeErrors, setBarcodeErrors] = useState<Record<string, string>>({});
+  const [barcodeSaved, setBarcodeSaved] = useState<Record<string, string>>({});
+  const [fallbackBarcodeUrls, setFallbackBarcodeUrls] = useState<Set<string>>(new Set());
   const [savingBarcode, setSavingBarcode] = useState<Set<string>>(new Set());
   const cancelBarcodeSave = useRef(new Set<string>());
   const barcodeFetcher = useFetcher<typeof action>();
-  const [sheetMode, setSheetMode] = useState<"roll" | "grid">(initialTemplate ? templateLayoutToSheetMode(initialTemplate.layout) : "grid");
-  const [toggles, setToggles] = useState(() => initialTemplate ? templateInputToToggles(initialTemplate) : {
+  const [sheetMode, setSheetMode] = useState<"roll" | "grid">(loaderData.restore?.sheetMode ?? (initialTemplate ? templateLayoutToSheetMode(initialTemplate.layout) : "grid"));
+  const [toggles, setToggles] = useState(() => loaderData.restore?.toggles ?? (initialTemplate ? templateInputToToggles(initialTemplate) : {
     showProductTitle: true, showVariantTitle: true, showSku: true, showPrice: false, showBarcodeText: true,
-  });
-  const previewSettingsRef = useRef({ sizeId, templateId, toggles });
-  previewSettingsRef.current = { sizeId, templateId, toggles };
+  }));
 
   // ----- preview (P1 item 1: stable key + stale guard + cache) -----
-  const [previewIndex, setPreviewIndex] = useState(0);
-  const [previewHtml, setPreviewHtml] = useState<string>("");
-  const [previewNonce, setPreviewNonce] = useState(0); // bump after generate
-  const previewGuard = useRef(createStaleGuard());
+  const [previewPageCount, setPreviewPageCount] = useState(60);
+  const [highlightedPreviewGid, setHighlightedPreviewGid] = useState<string | null>(null);
 
   const selectedGids = useMemo(() => [...selected.keys()], [selected]);
-  const totalLabels = useMemo(
-    () => [...selected.values()].reduce((sum, n) => sum + n, 0),
-    [selected],
-  );
-  const missingSelectedCount = useMemo(
-    () => countMissingSelected(selectedGids, barcodeByGid),
-    [selectedGids, barcodeByGid],
-  );
-
-  const previewGid = selectedGids[previewIndex] ?? null;
-  const previewKey = previewGid
-    ? buildPreviewKey({ gid: previewGid, sizeId, templateId, toggles })
-    : "";
-  const previewVariant = previewGid
-    ? Object.values(variantCache).flat().find((variant) => variant.gid === previewGid)
-    : undefined;
-  const previewProduct = previewVariant
-    ? products.find((product) => product.gid === previewVariant.productGid)
-    : undefined;
   const previewSize = loaderData.sizes.find((size) => size.id === sizeId);
   const previewTemplate = loaderData.templates.find((template) => template.id === templateId);
-  const previewGeometry = previewVariant?.barcode && previewSize && previewTemplate
-    ? fitLabel({
-        widthMm: previewSize.widthMm,
-        heightMm: previewSize.heightMm,
-        lines: {
-          name: previewProduct?.title,
-          variant: previewVariant.title === "Default Title" ? null : previewVariant.title,
-          sku: previewVariant.sku,
-          price: formatPrice(previewVariant.price),
-          barcodeText: previewVariant.barcode,
-        },
-        toggles,
-        overrides: previewTemplate,
-        barcodeValue: previewVariant.barcode,
-      })
-    : null;
-
+  const variantByGid = new Map(Object.values(variantCache).flat().map((variant) => [variant.gid, variant]));
+  const productByGid = new Map(products.map((product) => [product.gid, product]));
+  const titleForVariant = (variant: VariantDetail | undefined) =>
+    variant?.title && variant.title !== "Default Title"
+      ? variant.title
+      : productByGid.get(variant?.productGid ?? "")?.title ?? "Variant";
+  const previewSelections = [...selected].map(([gid, quantity]) => ({ gid, quantity }));
+  const previewType = (previewTemplate?.barcodeType ?? loaderData.barcodeType) as "code128" | "ean13" | "ean8";
+  const invalidReasons = Object.fromEntries([...variantByGid.values()].flatMap((variant) => {
+    if (!variant.barcode) return [];
+    const issue = validateValue(variant.barcode, { type: previewType, length: loaderData.barcodeLength })[0];
+    return issue ? [[variant.gid, issue]] : [];
+  }));
+  const totalLabels = countPrintableLabels(previewSelections, [...variantByGid.values()], new Set(Object.keys(invalidReasons)));
+  const missingSelectedCount = useMemo(() => countMissingSelected(selectedGids, barcodeByGid), [selectedGids, barcodeByGid]);
+  const missingSelectedNoteCount = selectedGids.filter((gid) => barcodeByGid.has(gid) && !barcodeByGid.get(gid)).length;
+  const previewRows = [...variantByGid.values()].map((variant) => ({ ...variant, productTitle: productByGid.get(variant.productGid)?.title ?? null }));
+  const previewEntries = buildPreviewEntries(previewSelections, previewRows, new Set(Object.keys(invalidReasons)));
+  const previewNotes = buildPreviewNotes(previewSelections, previewRows);
+  const visibleEntries = previewPage(previewEntries, previewPageCount);
+  const barcodeUrls = uniqueBarcodeUrls(visibleEntries.visible, previewType);
   useEffect(() => {
-    const requestId = previewGuard.current.start();
-    if (!previewKey) return;
-    const cached = previewCache.get<string>(previewKey);
-    if (cached !== undefined) {
-      setPreviewHtml(cached);
-      return;
-    }
-    const params = new URLSearchParams({
-      gid: previewGid!,
-      sizeId,
-      templateId,
-      showProductTitle: String(toggles.showProductTitle),
-      showVariantTitle: String(toggles.showVariantTitle),
-      showSku: String(toggles.showSku),
-      showPrice: String(toggles.showPrice),
-      showBarcodeText: String(toggles.showBarcodeText),
-    });
-    void fetch(`/api/label-preview?${params}`, { credentials: "same-origin" })
-      .then((response) => (response.ok ? response.text() : Promise.reject(new Error("preview"))))
-      .catch(() => null)
-      .then((html) => {
-        if (!mountedRef.current || !previewGuard.current.isCurrent(requestId)) return; // stale, ignore
-        const value =
-          html ?? "<div style='padding:8mm;color:#333'>Preview unavailable</div>";
-        previewCache.set(previewKey, value);
-        setPreviewHtml(value);
-      });
-  }, [previewKey, previewNonce, previewGid, sizeId, templateId, toggles]);
-
+    let cancelled = false;
+    void Promise.all(barcodeUrls.map(async (url) => {
+      try {
+        const response = await fetch(url, { credentials: "same-origin" });
+        return response.headers.get("x-barcode-fallback") === "code128" ? url : null;
+      } catch { return null; }
+    })).then((urls) => { if (!cancelled) setFallbackBarcodeUrls(new Set(urls.filter((url): url is string => Boolean(url)))); });
+    return () => { cancelled = true; };
+  }, [barcodeUrls.join("\n")]);
   // ----- product fetching (page appends) -----
   const fetchProductsPage = useCallback(
     async (opts: { q: string; filter: Filter; offset: number; append: boolean }) => {
@@ -650,7 +667,6 @@ export default function PrintLabelsPage() {
         setExpanded(expandedBeforeSearch.current ?? new Set<string>());
       }
       setQ(searchInput);
-      setPreviewIndex(0);
       void fetchProductsPage({ q: searchInput, filter, offset: 0, append: false });
     }, 250);
     return () => {
@@ -667,7 +683,6 @@ export default function PrintLabelsPage() {
       setExpanded(expandedBeforeSearch.current ?? new Set<string>());
     }
     setQ(searchInput);
-    setPreviewIndex(0);
     void fetchProductsPage({ q: searchInput, filter, offset: 0, append: false });
   };
 
@@ -758,15 +773,15 @@ export default function PrintLabelsPage() {
   const quantityFor = (variant: VariantDetail) => mode === "stock"
     ? quantityFromStock(variant.inventoryQuantity)
     : { quantity: 1, capped: false, zeroStock: false };
-  const tickVariants = (variants: VariantDetail[], onlyBarcoded: boolean) => {
+  const tickVariants = (variants: VariantDetail[]) => {
     const capped = new Set<string>();
     setSelected((prev) => {
       const next = new Map(prev);
       for (const variant of variants) {
-        if (onlyBarcoded && !variant.barcode) continue;
         if (!next.has(variant.gid)) {
           const initial = quantityFor(variant);
           next.set(variant.gid, initial.quantity);
+          quantityTouchedGids.current.delete(variant.gid);
           if (initial.capped) capped.add(variant.gid);
         }
       }
@@ -785,8 +800,8 @@ export default function PrintLabelsPage() {
     const initial = variant ? quantityFor(variant) : { quantity: qty ?? 1, capped: false, zeroStock: false };
     setSelected((prev) => {
       const next = new Map(prev);
-      if (next.has(gid)) next.delete(gid);
-      else next.set(gid, initial.quantity);
+      if (next.has(gid)) { next.delete(gid); quantityTouchedGids.current.delete(gid); }
+      else { next.set(gid, initial.quantity); quantityTouchedGids.current.delete(gid); }
       return next;
     });
     if (initial.capped) setCappedQuantityGids((prev) => new Set([...prev, gid]));
@@ -802,15 +817,20 @@ export default function PrintLabelsPage() {
       next.set(gid, clampQuantity(qty));
       return next;
     });
+    quantityTouchedGids.current.add(gid);
     setCappedQuantityGids((prev) => { const next = new Set(prev); capped ? next.add(gid) : next.delete(gid); return next; });
   };
 
-  const clearQty = (kind: "reset" | "zero") => setSelected((prev) => clearSelectedQuantitiesMap(prev, kind));
+  const clearQty = (kind: "reset" | "zero") => {
+    for (const gid of selected.keys()) quantityTouchedGids.current.add(gid);
+    setSelected((prev) => clearSelectedQuantitiesMap(prev, kind));
+  };
 
   const saveBarcode = (gid: string) => {
     const value = editingBarcode[gid] ?? "";
     setSavingBarcode((prev) => new Set([...prev, gid]));
     setBarcodeErrors((prev) => { const next = { ...prev }; delete next[gid]; return next; });
+    setBarcodeSaved((prev) => { const next = { ...prev }; delete next[gid]; return next; });
     const form = new FormData(); form.set("intent", "editBarcode"); form.set("variantGid", gid); form.set("value", value);
     barcodeFetcher.submit(form, { method: "post" });
   };
@@ -819,11 +839,11 @@ export default function PrintLabelsPage() {
     const key = cacheKeyFor(product.gid);
     const cached = variantCache[key];
     if (cached) {
-      tickVariants(cached, true);
+      tickVariants(cached);
       return;
     }
     const variants = await ensureVariantsLoaded([product.gid]);
-    if (variants) tickVariants(variants.filter((v) => v.productGid === product.gid), true);
+    if (variants) tickVariants(variants.filter((v) => v.productGid === product.gid));
   };
 
   /** P1 item 5: ONE bulk call for every loaded product. */
@@ -855,7 +875,7 @@ export default function PrintLabelsPage() {
       if (!variants) throw new Error("Could not load variants for selection. Retry?");
       setProducts(allProducts);
       setTotal(allTotal);
-      tickVariants(variants, false);
+      tickVariants(variants);
       setExpanded((prev) => {
         const next = new Set(prev);
         for (const gid of allGids) next.add(gid);
@@ -900,15 +920,11 @@ export default function PrintLabelsPage() {
       return;
     }
     const barcode = ("barcode" in barcodeFetcher.data ? barcodeFetcher.data.barcode : null) ?? "";
+    const normalizedBarcode = barcode || null;
     setBarcodeErrors((prev) => { const next = { ...prev }; delete next[variantGid]; return next; });
-    setVariantCache((prev) => Object.fromEntries(Object.entries(prev).map(([key, rows]) => [key, rows.map((row) => row.gid === variantGid ? { ...row, barcode } : row)])));
-    setBarcodeByGid((prev) => new Map(prev).set(variantGid, barcode));
-    setSelected((prev) => {
-      const next = new Map(prev);
-      if (!barcode) next.delete(variantGid);
-      return next;
-    });
-    setPreviewNonce((n) => n + 1);
+    setBarcodeSaved((prev) => ({ ...prev, [variantGid]: "Barcode saved." }));
+    setVariantCache((prev) => Object.fromEntries(Object.entries(prev).map(([key, rows]) => [key, rows.map((row) => row.gid === variantGid ? { ...row, barcode: normalizedBarcode } : row)])));
+    setBarcodeByGid((prev) => new Map(prev).set(variantGid, normalizedBarcode));
   }, [barcodeFetcher.state, barcodeFetcher.data]);
 
   // After a successful generate: patch ONLY the affected rows in place,
@@ -917,10 +933,6 @@ export default function PrintLabelsPage() {
     if (fetcher.state !== "idle" || !fetcher.data) return;
     if (!fetcher.data.ok || !fetcher.data.generated) return;
     const updates = new Map(fetcher.data.generated.map((g) => [g.gid, g.barcode]));
-    const currentPreviewSettings = previewSettingsRef.current;
-    for (const gid of updates.keys()) {
-      previewCache.delete(buildPreviewKey({ gid, ...currentPreviewSettings }));
-    }
     setVariantCache((prev) => {
       const next: Record<string, VariantDetail[]> = {};
       for (const [key, list] of Object.entries(prev)) {
@@ -937,6 +949,16 @@ export default function PrintLabelsPage() {
       for (const [gid, barcode] of updates) next.set(gid, barcode);
       return next;
     });
+    setSelected((prev) => {
+      const next = new Map(prev);
+      for (const gid of updates.keys()) {
+        const variant = Object.values(variantCacheRef.current).flat().find((row) => row.gid === gid);
+        if (next.has(gid) && !quantityTouchedGids.current.has(gid) && variant) {
+          next.set(gid, mode === "stock" ? quantityFromStock(variant.inventoryQuantity).quantity : 1);
+        }
+      }
+      return next;
+    });
     const generatedByProduct = new Map<string, number>();
     const countedGids = new Set<string>();
     for (const list of Object.values(variantCacheRef.current)) {
@@ -951,10 +973,7 @@ export default function PrintLabelsPage() {
       const delta = generatedByProduct.get(product.gid) ?? 0;
       return delta ? { ...product, withBarcode: Math.min(product.variantCount, product.withBarcode + delta) } : product;
     }));
-    // refresh the preview (the label content changed even though the
-    // preview key's gid is the same)
-    setPreviewNonce((n) => n + 1);
-  }, [fetcher.state, fetcher.data]);
+  }, [fetcher.state, fetcher.data, mode]);
 
   const submitPrint = (outputFormat: "print" | "pdf") => {
     printWindowRef.current = window.open("", "_blank");
@@ -992,49 +1011,50 @@ export default function PrintLabelsPage() {
 
   return (
     <s-page heading="Print Labels">
-      {/* Filters + search (debounced) */}
-      <s-section>
-        <s-stack direction="inline" gap="base">
-          {(["all", "has", "missing"] as Filter[]).map((f) => (
-            <s-button
-              key={f}
-              variant={filter === f ? "primary" : "tertiary"}
-              onClick={() => changeFilter(f)}
-            >
-              {f === "all" ? "All products" : f === "has" ? "Has barcode" : "Missing barcode"}
-            </s-button>
-          ))}
+      <main className="bs-print-layout">
+      <header className="bs-print-header">
+        <div className="bs-print-toolbar-head">
+          <div className="bs-print-heading"><h1>Print Labels</h1><p>{selected.size} selected, {totalLabels} labels</p></div>
           <input
+            className="bs-print-search"
             type="search"
             aria-label="Search products, variants, SKU or barcode"
             placeholder="Search products, variants, SKU or barcode"
             value={searchInput}
             onChange={(event) => setSearchInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") searchNow();
-            }}
-            style={{ minWidth: 260 }}
+            onKeyDown={(event) => { if (event.key === "Enter") searchNow(); }}
           />
-          <s-button variant="tertiary" onClick={() => void selectAllProducts()} {...(loadingMore || selectingAll || busy ? { disabled: true } : {})}>
-            Select all products
-          </s-button>
-          <details>
-            <summary>Clear Qty</summary>
-            <div style={{ display: "flex", gap: 8, padding: 8 }}>
-              <button type="button" onClick={() => clearQty("reset")}>Reset to 1</button>
-              <button type="button" onClick={() => clearQty("zero")}>Set to 0</button>
-            </div>
-          </details>
+        </div>
+        <div className="bs-print-toolbar-controls">
+          <div className="bs-print-toolbar-row bs-print-toolbar-filters">
+          <label className="bs-print-control"><span>Status</span><select value={filter} onChange={(event) => changeFilter(event.target.value as Filter)}><option value="all">All</option><option value="has">Has barcode</option><option value="missing">Missing</option></select></label>
+          <label>Template <select value={templateId} onChange={(event) => {
+            const nextTemplateId = event.target.value; setTemplateId(nextTemplateId);
+            const nextTemplate = loaderData.templates.find((template) => template.id === nextTemplateId);
+            if (nextTemplate) { setToggles(templateInputToToggles(nextTemplate)); setSizeId(nextTemplate.sizeId); setSheetMode(templateLayoutToSheetMode(nextTemplate.layout)); }
+          }}>{loaderData.templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
+          <label>Size <select value={sizeId} onChange={(event) => setSizeId(event.target.value)}>{loaderData.sizes.map((size) => <option key={size.id} value={size.id}>{size.name} ({size.widthMm}×{size.heightMm} mm)</option>)}</select></label>
+          </div>
+          <div className="bs-print-toolbar-row bs-print-toolbar-actions">
           <s-button
             variant="primary"
             onClick={() => showModal(GENERATE_MODAL_ID)}
             accessibilityLabel="Generate barcodes for the selected variants without one"
             {...(busy || missingSelectedCount === 0 ? { disabled: true } : {})}
           >
-            Generate barcodes{missingSelectedCount > 0 ? ` (${missingSelectedCount})` : ""}
+            Generate Barcode{missingSelectedCount > 0 ? ` (${missingSelectedCount})` : ""}
           </s-button>
+          <span className="bs-disabled-tooltip" title="Coming soon (Step 5)"><s-button variant="tertiary" disabled accessibilityLabel="Generate SKU — coming soon in Step 5">Generate SKU</s-button></span>
+          <s-button variant="tertiary" onClick={() => void selectAllProducts()} {...(loadingMore || selectingAll || busy ? { disabled: true } : {})}>Select All Products</s-button>
+          <label className="bs-print-control bs-quantity-control"><select aria-label="Quantity mode" value={mode} onChange={(event) => setMode(event.target.value as QuantityMode)}><option value="stock">Use Stock Qty</option><option value="fixed">Fixed</option></select></label>
+          <details className="bs-clear-qty"><summary>Clear Qty</summary><div className="bs-clear-qty-menu"><button type="button" onClick={() => clearQty("reset")}>Reset to 1</button><button type="button" onClick={() => clearQty("zero")}>Set to 0</button></div></details>
+          <s-button variant="primary" onClick={() => submitPrint("print")} {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true } : {})}>Print</s-button>
+          <s-button variant="tertiary" onClick={() => submitPrint("pdf")} {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true } : {})}>Save PDF</s-button>
           <s-link href="/app/generator">Generator</s-link>
-        </s-stack>
+          </div>
+        </div>
+        <div className="bs-print-showing">Showing {products.length} of {total} product(s){missingSelectedNoteCount > 0 && <span className="bs-print-selection-note">{missingSelectedNoteCount} selected without barcode (not printed)</span>}{selected.size > 0 && totalLabels === 0 && missingSelectedCount > 0 && <span className="bs-print-empty-hint">Generate barcodes first</span>}</div>
+        {restoreNotice && <s-banner tone="warning">{restoreNotice}<button type="button" onClick={() => setRestoreNotice(null)}>Dismiss</button></s-banner>}
         {listError && (
           <s-banner tone="critical">
             {listError}{" "}
@@ -1043,191 +1063,45 @@ export default function PrintLabelsPage() {
             </s-button>
           </s-banner>
         )}
-      </s-section>
+      </header>
 
-      <style>{`[data-variant-match="true"] { display: inline-block; padding: 2px 6px; outline: 2px solid #f0ad4e; background: #fffaf0; border-radius: 4px; }`}</style>
       {/* Product list with Load more */}
-      <s-section heading={`Showing ${products.length} of ${total} product(s)`}>
-        <s-table>
-          <s-table-header-row>
-            <s-table-header>Select barcoded variants</s-table-header>
-            <s-table-header>Product</s-table-header>
-            <s-table-header>Variants</s-table-header>
-            <s-table-header>Stock</s-table-header>
-            <s-table-header>Expand</s-table-header>
-          </s-table-header-row>
-          <s-table-body>
-            {products.map((product) => {
-              return (
-                <s-table-row key={product.gid}>
-                  <s-table-cell>
-                    <input
-                      type="checkbox"
-                      aria-label={`Select all barcoded variants of ${product.title ?? "product"}`}
-                      disabled={product.withBarcode === 0}
-                      onChange={() => void parentCheckbox(product)}
-                    />
-                  </s-table-cell>
-                  <s-table-cell>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      {product.imageUrl ? (
-                        <img
-                          src={product.imageUrl}
-                          alt=""
-                          loading="lazy"
-                          style={{ width: 32, height: 32, objectFit: "cover", borderRadius: 4 }}
-                        />
-                      ) : (
-                        <span
-                          aria-hidden="true"
-                          style={{ display: "inline-block", width: 32, height: 32, borderRadius: 4, background: "#f0f0f0" }}
-                        />
-                      )}
-                      <span>
-                        {product.title ?? "—"}
-                        {product.productType && (
-                          <small style={{ display: "block", color: "#8a8a8a" }}>{product.productType}</small>
-                        )}
-                      </span>
-                    </div>
-                  </s-table-cell>
-                  <s-table-cell>
-                    {product.variantCount} ({product.withBarcode} with barcode)
-                  </s-table-cell>
-                  <s-table-cell>{product.stockSum}</s-table-cell>
-                  <s-table-cell>
-                    <s-button variant="tertiary" onClick={() => expandProduct(product.gid)}>
-                      {expanded.has(product.gid) ? "Collapse" : "Expand"}
-                    </s-button>
-                  </s-table-cell>
-                </s-table-row>
-              );
-            })}
-            {products.length === 0 && !loadingMore && (
-              <s-table-row>
-                <s-table-cell>No products match. Sync the catalog from the Dashboard first.</s-table-cell>
-              </s-table-row>
-            )}
-          </s-table-body>
-        </s-table>
-
-        {/* Level 2: variants of every expanded product (multiple at once) */}
-        {[...expanded].map((productGid) => {
-          const key = cacheKeyFor(productGid);
-          const variants = variantCache[key];
-          const product = products.find((p) => p.gid === productGid);
-          if (!variants) {
-            const loading = loadingVariantsFor.has(key);
-            const error = variantErrors[key];
-            return (
-              <s-box key={productGid} padding="base">
-                {error ? (
-                  <>
-                    <span style={{ color: "#b42318" }}>Could not load variants.</span>{" "}
-                    <s-button variant="tertiary" onClick={() => void ensureVariantsLoaded([productGid], true)}>Retry</s-button>
-                  </>
-                ) : (
-                  <s-text color="subdued">{loading ? "Loading variants…" : "Preparing variants…"}</s-text>
-                )}
-              </s-box>
-            );
-          }
-          return (
-            <s-section key={productGid} heading={product?.title ?? productGid}>
-              <s-table>
-                <s-table-header-row>
-                  <s-table-header>Select</s-table-header>
-                  <s-table-header>Variant</s-table-header>
-                  <s-table-header>SKU</s-table-header>
-                  <s-table-header>Barcode</s-table-header>
-                  <s-table-header>Price</s-table-header>
-                  <s-table-header>Stock</s-table-header>
-                  <s-table-header>Quantity</s-table-header>
-                </s-table-header-row>
-                <s-table-body>
-                  {variants.map((variant) => (
-                    <s-table-row key={variant.gid}>
-                      <s-table-cell>
-                        {variant.barcode ? (
-                          <input
-                            type="checkbox"
-                            aria-label={`Select ${variant.title ?? "variant"}`}
-                            checked={selected.has(variant.gid)}
-                            onChange={() => toggleVariant(variant.gid)}
-                          />
-                        ) : (
-                          <span style={{ color: "#8a8a8a" }}>
-                            No barcode (<s-link href="/app/generator?filter=missing">Generator</s-link>)
-                          </span>
-                        )}
-                      </s-table-cell>
-                      <s-table-cell>
-                        <span data-variant-match={variant.matched ? "true" : undefined}>
-                          {variant.title ?? "—"}
-                        </span>
-                        <s-badge tone={variant.barcodeStatus === "duplicate" ? "critical" : variant.barcodeStatus === "missing" ? "caution" : "success"}>
-                          {variant.barcodeStatus === "duplicate" ? "Duplicate" : variant.barcodeStatus === "missing" ? "Missing" : "Ready"}
-                        </s-badge>
-                      </s-table-cell>
-                      <s-table-cell>{variant.sku ?? "—"}</s-table-cell>
-                      <s-table-cell>
-                        <input
-                          aria-label={`Barcode for ${variant.title ?? "variant"}`}
-                          value={editingBarcode[variant.gid] ?? variant.barcode ?? ""}
-                          disabled={savingBarcode.has(variant.gid)}
-                          onFocus={() => setEditingBarcode((prev) => ({ ...prev, [variant.gid]: variant.barcode ?? "" }))}
-                          onChange={(event) => setEditingBarcode((prev) => ({ ...prev, [variant.gid]: event.target.value }))}
-                          onBlur={() => {
-                            if (cancelBarcodeSave.current.delete(variant.gid)) return;
-                            if ((editingBarcode[variant.gid] ?? variant.barcode ?? "") !== (variant.barcode ?? "")) saveBarcode(variant.gid);
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") { event.preventDefault(); (event.currentTarget as HTMLInputElement).blur(); }
-                            if (event.key === "Escape") { cancelBarcodeSave.current.add(variant.gid); setEditingBarcode((prev) => ({ ...prev, [variant.gid]: variant.barcode ?? "" })); (event.currentTarget as HTMLInputElement).blur(); }
-                          }}
-                          style={{ fontFamily: "monospace", width: 150 }}
-                        />
-                        <small>Code128, length {loaderData.barcodeLength}; must be unique</small>
-                        {savingBarcode.has(variant.gid) && <small> Saving…</small>}
-                        {barcodeErrors[variant.gid] && <div role="alert" style={{ color: "#b42318" }}>{barcodeErrors[variant.gid]}</div>}
-                      </s-table-cell>
-                      <s-table-cell>{variant.price ?? "—"}</s-table-cell>
-                      <s-table-cell>{variant.inventoryQuantity ?? "—"}</s-table-cell>
-                      <s-table-cell>
-                        {selected.has(variant.gid) && (
-                          <>
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                          <button type="button" aria-label={`Decrease quantity for ${variant.title ?? "variant"}`} onClick={() => setQty(variant.gid, (selected.get(variant.gid) ?? 0) - 1)}>−</button>
-                          <input
-                            type="number"
-                            min={0}
-                            max={DEFAULT_CAP_PER_VARIANT}
-                            step={1}
-                            aria-label={`Quantity for ${variant.title ?? "variant"}`}
-                            value={selected.get(variant.gid)}
-                            onChange={(event) => setQty(variant.gid, event.target.value)}
-                            onBlur={(event) => setQty(variant.gid, event.target.value)}
-                            style={{ width: 72 }}
-                          />
-                          <button type="button" aria-label={`Increase quantity for ${variant.title ?? "variant"}`} onClick={() => setQty(variant.gid, (selected.get(variant.gid) ?? 0) + 1)}>+</button>
-                          </span>
-                          {cappedQuantityGids.has(variant.gid) && <small>capped at {DEFAULT_CAP_PER_VARIANT}</small>}
-                          {variant.inventoryQuantity === 0 && <small style={{ color: "#777" }}>0 stock</small>}
-                          </>
-                        )}
-                      </s-table-cell>
-                    </s-table-row>
-                  ))}
-                  {variants.length === 0 && (
-                    <s-table-row>
-                      <s-table-cell>No variants{q ? ` matching “${q}”` : ""}.</s-table-cell>
-                    </s-table-row>
-                  )}
-                </s-table-body>
-              </s-table>
-            </s-section>
-          );
+      <div className="bs-print-body">
+      <div className="bs-print-products">
+      <section className="bs-product-browser">
+        {products.map((product) => {
+          const productVariants = Object.values(variantCache).flat().filter((variant) => variant.productGid === product.gid);
+          const hasInvalid = productVariants.some((variant) => variant.barcode && validateValue(variant.barcode, { type: previewType, length: loaderData.barcodeLength }).length > 0);
+          const hasDuplicate = productVariants.some((variant) => variant.barcodeStatus === "duplicate");
+          const productStatus = hasInvalid ? "Invalid" : hasDuplicate ? "Duplicate" : product.withBarcode < product.variantCount ? "Missing" : "Ready";
+          return <Fragment key={product.gid}>
+          <div className="bs-product-card" id={`product-${product.gid}`}>
+            <input type="checkbox" aria-label={`Select all variants of ${product.title ?? "product"}`} disabled={loadingVariantsFor.has(cacheKeyFor(product.gid))} onChange={() => void parentCheckbox(product)} />
+            <button className="bs-product-expand" type="button" aria-label={`${expanded.has(product.gid) ? "Collapse" : "Expand"} ${product.title ?? "product"}`} onClick={() => expandProduct(product.gid)}>{expanded.has(product.gid) ? "▾" : "▸"}</button>
+            {product.imageUrl ? <img src={product.imageUrl} alt="" loading="lazy" /> : <span className="bs-product-placeholder" />}
+            <div className="bs-product-meta"><b title={product.title ?? "Product"}>{product.title ?? "—"}</b><span className="bs-muted">{product.productType || "Product"} · {product.variantCount} variants · {product.withBarcode} barcoded</span></div>
+            <span className={product.stockSum < 0 ? "bs-negative" : "bs-muted"}>Stock {product.stockSum}</span>
+            <span className="bs-product-status"><s-badge tone={productStatus === "Ready" ? "success" : productStatus === "Missing" ? "caution" : "critical"}>{productStatus}</s-badge></span>
+            <s-button variant="tertiary" onClick={() => expandProduct(product.gid)}>{expanded.has(product.gid) ? "Collapse" : "Expand"}</s-button>
+          </div>
+          {expanded.has(product.gid) && <div className="bs-variant-list">{variantCache[cacheKeyFor(product.gid)]?.map((variant) => {
+            const statusInfo = barcodeLabelStatus(variant.barcode, variant.barcodeStatus === "duplicate", { type: previewType, length: loaderData.barcodeLength });
+            const invalidReason = statusInfo.status === "Invalid" ? statusInfo.reason : null;
+            const status = statusInfo.status;
+            return <div key={variant.gid} id={`variant-${variant.gid}`} className={`bs-variant-card ${highlightedPreviewGid === variant.gid ? "bs-variant-highlight" : ""}`}>
+              <input type="checkbox" aria-label={`Select ${variant.title ?? "variant"}`} checked={selected.has(variant.gid)} onChange={() => toggleVariant(variant.gid)} />
+              <span className="bs-variant-name" title={variant.title ?? "Variant"}>{variant.title ?? "—"}</span>
+              <span className="bs-variant-sku">{variant.sku ?? "—"}</span>
+              <label><span className="bs-muted">Barcode</span><input aria-label={`Barcode for ${variant.title ?? "variant"}`} value={editingBarcode[variant.gid] ?? variant.barcode ?? ""} disabled={savingBarcode.has(variant.gid)} onFocus={() => setEditingBarcode((prev) => ({ ...prev, [variant.gid]: variant.barcode ?? "" }))} onChange={(event) => setEditingBarcode((prev) => ({ ...prev, [variant.gid]: event.target.value }))} onBlur={() => { if (cancelBarcodeSave.current.delete(variant.gid)) return; if ((editingBarcode[variant.gid] ?? variant.barcode ?? "") !== (variant.barcode ?? "")) saveBarcode(variant.gid); }} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); (event.currentTarget as HTMLInputElement).blur(); } if (event.key === "Escape") { cancelBarcodeSave.current.add(variant.gid); setEditingBarcode((prev) => ({ ...prev, [variant.gid]: variant.barcode ?? "" })); (event.currentTarget as HTMLInputElement).blur(); } }} />{!variant.barcode && <a href="/app/generator?filter=missing">Add barcode</a>}</label>
+              <span>{variant.price ?? "—"}</span><span className={variant.inventoryQuantity != null && variant.inventoryQuantity < 0 ? "bs-negative" : ""}>{variant.inventoryQuantity ?? "—"}</span>
+              <div className="bs-variant-status"><span className="bs-status-pill"><s-badge tone={status === "Ready" ? "success" : status === "Missing" ? "caution" : "critical"} aria-label={statusInfo.ariaLabel}>{status}</s-badge></span>{statusInfo.reason && status !== "Missing" && <span className="bs-muted" title={statusInfo.reason}>{statusInfo.reason}</span>}</div>
+              {selected.has(variant.gid) && <span className="bs-qty-controls"><button type="button" onClick={() => setQty(variant.gid, selected.get(variant.gid)! - 1)}>−</button><input aria-label="Quantity" type="number" min="0" max={DEFAULT_CAP_PER_VARIANT} value={selected.get(variant.gid)} onChange={(event) => setQty(variant.gid, event.target.value)} /><button type="button" onClick={() => setQty(variant.gid, selected.get(variant.gid)! + 1)}>+</button></span>}
+              {(barcodeErrors[variant.gid] || barcodeSaved[variant.gid]) && <div className="bs-row-banner"><s-banner tone={barcodeErrors[variant.gid] ? "critical" : "success"}>{barcodeErrors[variant.gid] ?? barcodeSaved[variant.gid]}<button type="button" onClick={() => { setBarcodeErrors((prev) => { const next = { ...prev }; delete next[variant.gid]; return next; }); setBarcodeSaved((prev) => { const next = { ...prev }; delete next[variant.gid]; return next; }); }}>Dismiss</button></s-banner></div>}
+            </div>;
+          })}</div>}
+        </Fragment>;
         })}
+        {products.length === 0 && !loadingMore && <div className="bs-print-empty">No products match. Sync the catalog from the Dashboard first.</div>}
 
         {loadingMore && (
           <s-box padding="base">
@@ -1239,59 +1113,12 @@ export default function PrintLabelsPage() {
             Load more products ({products.length} shown)
           </s-button>
         )}
-      </s-section>
+      </section>
 
       {/* Print settings */}
-      <s-section heading="Print settings">
+      <section className="bs-print-settings">
+        <h2>Print settings</h2>
         <s-stack direction="inline" gap="base">
-          <label>
-            Label size
-            <select
-              value={sizeId}
-              onChange={(event) => setSizeId(event.target.value)}
-              style={{ display: "block", marginTop: 4 }}
-            >
-              {loaderData.sizes.map((size) => (
-                <option key={size.id} value={size.id}>
-                  {size.name} ({size.widthMm}×{size.heightMm} mm)
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Template
-            <select
-              value={templateId}
-              onChange={(event) => {
-                const nextTemplateId = event.target.value;
-                setTemplateId(nextTemplateId);
-                const nextTemplate = loaderData.templates.find((template) => template.id === nextTemplateId);
-                if (nextTemplate) {
-                  setToggles(templateInputToToggles(nextTemplate));
-                  setSizeId(nextTemplate.sizeId);
-                  setSheetMode(templateLayoutToSheetMode(nextTemplate.layout));
-                }
-              }}
-              style={{ display: "block", marginTop: 4 }}
-            >
-              {loaderData.templates.map((template) => (
-                <option key={template.id} value={template.id}>
-                  {template.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Quantity mode
-            <select
-              value={mode}
-              onChange={(event) => setMode(event.target.value as QuantityMode)}
-              style={{ display: "block", marginTop: 4 }}
-            >
-              <option value="fixed">Fixed per variant</option>
-              <option value="stock">Match stock quantity (max 500)</option>
-            </select>
-          </label>
           <label>
             Sheet layout
             <select
@@ -1354,60 +1181,53 @@ export default function PrintLabelsPage() {
             </s-paragraph>
           );
         })()}
-      </s-section>
+      </section>
+      </div>
 
-      {/* Live preview (single label; key excludes qty) */}
-      <s-section heading="Preview">
-        {selectedGids.length === 0 ? (
-          <s-paragraph>
-            <s-text color="subdued">Select variants to see a live preview.</s-text>
-          </s-paragraph>
-        ) : (
-          <>
-            <s-stack direction="inline" gap="base">
-              <s-button
-                variant="tertiary"
-                onClick={() => setPreviewIndex((i) => Math.max(0, i - 1))}
-                {...(previewIndex === 0 ? { disabled: true } : {})}
-              >
-                ‹ Prev
-              </s-button>
-              <s-paragraph>
-                Label {previewIndex + 1} of {selectedGids.length}
-              </s-paragraph>
-              <s-button
-                variant="tertiary"
-                onClick={() =>
-                  setPreviewIndex((i) => Math.min(selectedGids.length - 1, i + 1))
-                }
-                {...(previewIndex >= selectedGids.length - 1 ? { disabled: true } : {})}
-              >
-                Next ›
-              </s-button>
-            </s-stack>
-            <div
-              data-fit-label-width-mm={previewGeometry?.widthMm}
-              data-fit-label-height-mm={previewGeometry?.heightMm}
-              title={previewGeometry ? `Fitted preview: ${previewGeometry.widthMm} × ${previewGeometry.heightMm} mm; ${previewGeometry.lines.length} text lines` : undefined}
-              style={{
-                background: "#ffffff",
-                border: "1px solid #e0e0e0",
-                borderRadius: 8,
-                padding: 16,
-                display: "inline-block",
-              }}
-              dangerouslySetInnerHTML={{ __html: previewHtml }}
-            />
-          </>
-        )}
-      </s-section>
+      <aside className="bs-preview-panel">
+        <h2>Preview</h2>
+        <p className="bs-preview-subtitle">{previewTemplate?.name ?? "Template"} ({previewSize?.name ?? "Label size"})</p>
+        {shouldShowPreviewEmptyState(selected.size) ? <p className="bs-preview-empty">Select variants to see the live label preview.</p> : <>
+          <p className="bs-muted">{selected.size} selected · {totalLabels} label copies{missingSelectedNoteCount > 0 && <> · {missingSelectedNoteCount} selected without barcode (not printed)</>}</p>
+          {previewNotes.noBarcode.length > 0 && <div className="bs-preview-missing-list">
+            {previewNotes.noBarcode.map((note) => <p className="bs-preview-note" key={`${note.gid}-${note.kind}`}>{note.text}</p>)}
+            {previewNotes.noBarcodeMore > 0 && <p className="bs-preview-note">+{previewNotes.noBarcodeMore} more without barcode</p>}
+          </div>}
+          {previewNotes.quantityZero.map((note) => <p className="bs-preview-note bs-preview-note-muted" key={`${note.gid}-${note.kind}`}>{note.text}</p>)}
+          {visibleEntries.visible.length > 0 && <div className="bs-label-copies">{visibleEntries.visible.map((entry) => {
+            const variant = variantByGid.get(entry.gid);
+            const size = previewSize;
+            const imageUrl = entry.barcode ? `/api/barcode-svg?value=${encodeURIComponent(entry.barcode)}&type=${encodeURIComponent(previewTemplate?.barcodeType ?? loaderData.barcodeType)}` : null;
+            const geometry = size ? fitLabel({ widthMm: size.widthMm, heightMm: size.heightMm, barcodeValue: entry.barcode ?? "", lines: {
+                name: productByGid.get(variant?.productGid ?? "")?.title, variant: variant?.title === "Default Title" ? null : variant?.title,
+                sku: variant?.sku, price: formatPrice(variant?.price), barcodeText: entry.barcode,
+              }, toggles, overrides: previewTemplate ?? {} }) : null;
+            return <article key={`${entry.gid}-${entry.copy}`} className="bs-label-copy" onClick={() => {
+              setHighlightedPreviewGid(entry.gid);
+              document.getElementById(`variant-${entry.gid}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+              window.setTimeout(() => setHighlightedPreviewGid(null), 1800);
+            }}>
+              <p className="bs-label-caption">{entry.caption}</p>
+              <div className="bs-label-paper" style={{ aspectRatio: `${size?.widthMm ?? 50} / ${size?.heightMm ?? 25}` }} data-fit-label-width-mm={geometry?.widthMm}>
+                {geometry?.lines.map((line) => <div key={line.key} className="bs-label-geometry-text" style={{ left: `${line.xMm / geometry.widthMm * 100}%`, top: `${line.yMm / geometry.heightMm * 100}%`, width: `${line.widthMm / geometry.widthMm * 100}%`, height: `${line.heightMm / geometry.heightMm * 100}%`, fontSize: `${line.fontSizePt * 0.3528 / geometry.heightMm * 100}cqh`, textAlign: line.align }}>{line.text}</div>)}
+                {geometry && imageUrl && <img className="bs-label-bars" loading="lazy" src={imageUrl} alt="Barcode" style={{ left: `${geometry.barcodeBox.xMm / geometry.widthMm * 100}%`, top: `${geometry.barcodeBox.yMm / geometry.heightMm * 100}%`, width: `${geometry.barcodeBox.widthMm / geometry.widthMm * 100}%`, height: `${geometry.barcodeBox.heightMm / geometry.heightMm * 100}%` }} />}
+              </div>
+              {imageUrl && fallbackBarcodeUrls.has(imageUrl) && <p className="bs-fallback-note">Rendered as Code128 (fallback)</p>}
+            </article>;
+          })}</div>
+          }
+          {visibleEntries.hasMore && <s-button variant="tertiary" onClick={() => setPreviewPageCount((count) => count + 60)}>Show more labels</s-button>}
+          {barcodeUrls.length > 0 && <span className="bs-muted">{barcodeUrls.length} unique barcode image(s) · repeated values share browser cache.</span>}
+        </>}
+      </aside>
+      </div>
 
       {result && (
         <s-banner tone={result.ok ? "success" : "critical"}>
           {result.message}
           {result.skipped && result.skipped.length > 0 && (
             <s-paragraph>
-              Skipped: {result.skipped.map((s) => `${s.variantGid} (${s.reason})`).join(", ")}
+              Skipped: {result.skipped.map((row) => `${titleForVariant(variantByGid.get(row.variantGid))} (${row.reason})`).join(", ")}
             </s-paragraph>
           )}
           {result.jobId && result.printUrl && (
@@ -1434,20 +1254,9 @@ export default function PrintLabelsPage() {
 
       {/* Sticky bottom bar */}
       {selected.size > 0 && (
-        <div
-          style={{
-            position: "sticky",
-            bottom: 0,
-            background: "var(--s-color-bg, #fff)",
-            borderTop: "1px solid #e0e0e0",
-            padding: "8px 16px",
-            display: "flex",
-            gap: 12,
-            alignItems: "center",
-          }}
-        >
+        <div className="bs-sticky-printbar">
           <strong>
-            {selected.size} variant{selected.size === 1 ? "" : "s"} · {totalLabels} label
+            {selected.size} selected · {totalLabels} label
             {totalLabels === 1 ? "" : "s"}
           </strong>
           <s-button
@@ -1475,8 +1284,7 @@ export default function PrintLabelsPage() {
       {/* Generate confirmation modal (P1 item 6) */}
       <s-modal id={GENERATE_MODAL_ID} heading="Generate barcodes" onHide={() => undefined}>
         <s-paragraph>
-          Generate barcodes for {missingSelectedCount} selected variant(s) without a
-          barcode? Existing barcodes are never overwritten; the batch is
+          Generate barcodes for {missingSelectedCount} variants? Existing barcodes are never overwritten; the batch is
           all-or-nothing.
         </s-paragraph>
         <s-stack direction="inline" gap="base">
@@ -1492,6 +1300,7 @@ export default function PrintLabelsPage() {
           </s-button>
         </s-stack>
       </s-modal>
+      </main>
     </s-page>
   );
 }

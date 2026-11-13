@@ -298,7 +298,7 @@ describe("buildPrintPlan (print action core)", () => {
     expect(plan.skipped).toEqual(
       expect.arrayContaining([
         { variantGid: "ghost", reason: "not in catalog cache" },
-        { variantGid: "nobc", reason: "no barcode" },
+        { variantGid: "nobc", reason: "No barcode" },
       ]),
     );
 
@@ -328,10 +328,11 @@ describe("buildPrintPlan (print action core)", () => {
     });
   });
 
-  it("skips an invalid cache barcode even if the client selected it", () => {
+  it("excludes a missing barcode from print output and totals", () => {
     const plan = buildPrintPlan(cacheRows, ["nobc"], settings, barcodeRules);
     expect(plan.lines).toHaveLength(0);
     expect(plan.labelCount).toBe(0);
+    expect(plan.skipped).toEqual([{ variantGid: "nobc", reason: "No barcode" }]);
   });
 });
 

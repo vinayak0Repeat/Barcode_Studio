@@ -55,6 +55,7 @@ export function barcodeBars(
   value: string,
   type: string,
   cache: BarcodeBarsCache = new Map(),
+  encoder: typeof encode = encode,
 ): BarcodeBarsResult {
   const key = `${type}\u0000${value}`;
   const found = cache.get(key);
@@ -65,7 +66,7 @@ export function barcodeBars(
   const initialType = allowed.includes(requested as BarcodeType) ? requested as BarcodeType : "code128";
   let result: BarcodeBarsResult;
   try {
-    const { bars, width } = encode(value, initialType);
+    const { bars, width } = encoder(value, initialType);
     result = {
       kind: "bars", bars, width, requestedType: type, type: initialType,
       fallback: initialType !== requested, tooDense: false,
@@ -73,7 +74,7 @@ export function barcodeBars(
   } catch (firstError) {
     if (initialType !== "code128") {
       try {
-        const { bars, width } = encode(value, "code128");
+        const { bars, width } = encoder(value, "code128");
         result = {
           kind: "bars", bars, width, requestedType: type, type: "code128",
           fallback: true, tooDense: false,

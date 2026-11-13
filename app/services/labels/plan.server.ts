@@ -71,7 +71,7 @@ export function buildPrintPlan(
       continue;
     }
     if (!row.barcode) {
-      skipped.push({ variantGid: gid, reason: "no barcode" });
+      skipped.push({ variantGid: gid, reason: "No barcode" });
       continue;
     }
     const issues = validateValue(row.barcode, {

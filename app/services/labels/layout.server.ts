@@ -4,7 +4,7 @@ import {
   templateToOverrides,
   type LabelLineToggles,
   type LabelTemplateOverrides,
-} from "./fit";
+} from "./labelGeometry.shared";
 import {
   barcodeBars,
   scaleBarcodeBars,
@@ -225,7 +225,7 @@ function makeLabel(
       align: "center",
     });
   } else {
-    if (result.fallback) warnings.add(`Code128 fallback used for ${line.variantGid}`);
+    if (result.fallback) warnings.add(`Rendered as Code128 (fallback) for ${line.variantGid}`);
     if (scaled.tooDense) warnings.add(`Barcode may be too dense for 203 dpi printing (${line.variantGid})`);
     for (const bar of scaled.bars) {
       primitives.push({

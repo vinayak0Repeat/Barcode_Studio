@@ -118,9 +118,9 @@ describe("Print Labels shared helpers", () => {
   });
 
   it("counts only selected variants known to have no barcode", () => {
-    expect(countMissingSelected(["missing", "has", "unknown"], new Map([
-      ["missing", null], ["has", "123"],
-    ]))).toBe(1);
+    expect(countMissingSelected(["missing", "empty", "has", "unknown"], new Map([
+      ["missing", null], ["empty", ""], ["has", "123"],
+    ]))).toBe(2);
   });
 
   it("groups only requested products and preserves empty groups", () => {

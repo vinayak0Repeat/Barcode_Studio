@@ -168,14 +168,14 @@ Sources: `app/routes/app.print-labels.tsx`, `print.$jobId.tsx`, `app.print-histo
 6. **Generate barcodes for selection (guarded)** — button on this page calling the existing `generateForVariants` engine via a small action, then patching the level-2 cache from returned assignments. Verify: select missing-barcode variants → Generate → rows update in place, no full reload.
 
 ### P2 — feature parity gaps
-7. **Partial (in progress):** quantity stepper, zero quantity, Clear Qty menu, shared clamping, and stock-seeded selection are implemented; quantity action validation remains. No test run yet.
-8. **Partial (in progress):** barcode editing submits through guarded `setBarcode`, with inline save/error feedback; row-level Polaris banners, success state, and action tests remain.
-9. **Open:** preview still uses the single-label Prev/Next flow.
-10. **Partial:** the SVG endpoint retries Code128; print renderer already has barcode-vector fallback. Fallback notices and endpoint/renderer tests remain.
-11. **Partial:** print creation allocates `BSP/` names and writes one `printed` activity row with job/line creation; history/dashboard naming has been started. Test coverage remains.
-12. **Open:** Print History has an “Open in Print Labels” link, but job restoration is not implemented.
-13. **Open:** fixed toolbar and two-column sticky preview layout remain.
-14. **Partial:** visible variants load ready/missing/duplicate status through the grouped status helper; invalid status/reason details remain.
+7. **Done:** stock-seeded selection, +/- quantity steppers, zero quantities, Reset to 1 / Set to 0, per-variant 500 cap, 2,000 job cap, and >500 warning remain active in the redesigned layout.
+8. **Done:** inline barcode edit uses the existing guarded `setBarcode` action, saves on blur/Enter, Escape cancels, and row-level dismissible critical/success banners show errors and success.
+9. **Done:** preview expands copies in selection order, renders the first 60 with lazy `/api/barcode-svg` images, shares duplicate image URLs, offers Show more, lists skipped rows, and scrolls/highlights a row when its card is clicked. Preview uses the shared fit geometry module.
+10. **Done:** preview reads the SVG response fallback header and displays “Rendered as Code128”; print HTML includes a visible pre-print fallback notice. Tests cover fallback and the typed unavailable result when both encoders fail.
+11. **Done (prior implementation):** print action creates a new BSP job and `printed` Activity with the job/line writes.
+12. **Done:** Print History opens a shop-scoped job through `?job=<id>`; selection/quantities and saved template/size/mode/toggles restore from snapshots against current cache values, with a missing-variant notice. Reprint still uses a fresh signed URL for the unchanged job.
+13. **Done:** Print Labels uses a sticky toolbar and two-column product/preview layout, collapsing to one column at 900px and below; product and variant rows use responsive card layouts.
+14. **Done:** variants show Ready, Missing, Duplicate, or Invalid; invalid badges expose validation details, missing rows link to Generator, and plan validation still happens server-side.
 
 ### P3 — polish
 15. Sever `window.opener` on the print tab.
@@ -212,6 +212,6 @@ The label configuration work is now implemented in the Shopify app:
 - Retail and Retail 50x25 are initial defaults. Seed upserts use empty updates, so re-authentication does not replace edited configuration or a user's selected defaults. No schema change or migration was needed.
 - Existing jobs retain their snapshots. New label-size snapshots include the size ID; older snapshots without an ID are counted by their saved size name.
 - Root cause of the template-selection bug: the Shopify preview path selected hardcoded static presets by template name, so changing a DB template did not reliably feed its field toggles or numeric overrides into rendering. The template layout was also not carried into the print selection state. Rendering now receives the stored template configuration explicitly.
-- Verification in this workspace: direct `tsc --noEmit` passed; Vitest via `node.exe node_modules/vitest/vitest.mjs run --configLoader runner` passed (131 passed, 1 skipped). `npm.cmd run typecheck`, `npm.cmd test`, and `npm.cmd run build` could not load their configs because esbuild was denied access to the parent directory and could not resolve the config files in the restricted shell. Retry those package scripts in a shell with normal workspace-parent read access.
+- Verification in this workspace (2026-11-13): direct `node.exe node_modules/typescript/bin/tsc --noEmit` passed; Vitest via `node.exe node_modules/vitest/vitest.mjs run --configLoader runner` passed (140 passed, 1 skipped). `npm.cmd run typecheck`, `npm.cmd test`, and `npm.cmd run build` could not load their configs because esbuild was denied access to the parent directory and could not resolve the config files in the restricted shell. Retry those package scripts in a shell with normal workspace-parent read access.
 
 Not ported in this work: Odoo's barcode/SKU generation and inventory editing from Print Labels, PDF attachment/report flow, per-product pricelists, uncapped quantities, and wider catalog browsing workflow. The Shopify write guard, engine, and sync paths were not changed.
