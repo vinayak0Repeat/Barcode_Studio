@@ -2,6 +2,12 @@ import type { LabelLineToggles } from "./fit";
 
 export interface LabelToggles extends LabelLineToggles {
   fontSize?: number;
+  nameFontSize?: number;
+  skuFontSize?: number;
+  priceFontSize?: number;
+  barcodeTextFontSize?: number;
+  barcodeWidthPct?: number;
+  barcodeHeightPct?: number;
 }
 
 /** Client-safe template defaults shared by the settings page and renderer. */

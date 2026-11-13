@@ -10,7 +10,8 @@ import prisma from "../db.server";
 import { Prisma } from "@prisma/client";
 import { generateForVariants, getBarcodeConfig, setBarcode } from "../services/barcode/engine.server";
 import { fitLabel } from "../services/labels/fit";
-import { defaultTogglesForTemplate } from "../services/labels/presets";
+import { templateInputToToggles, templateLayoutToSheetMode } from "../services/labels/adminValidation.shared";
+import { getLabelDefault } from "../services/labels/adminSettings.server";
 import { formatPrice } from "../services/labels/formatPrice";
 import { buildPrintPlan } from "../services/labels/plan.server";
 import { pdfUrlFor, printUrlFor } from "../services/labels/printToken.server";
@@ -62,7 +63,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // Slim initial load: settings + the FIRST page of products. Further pages
   // come from /api/print-labels/products and are appended client-side.
-  const [sizes, templates, config, firstPage] = await Promise.all([
+  const [sizes, templates, config, firstPage, configuredTemplateId, configuredSizeId] = await Promise.all([
     prisma.labelSize.findMany({
       where: { shopId, active: true },
       orderBy: { sequence: "asc" },
@@ -78,7 +79,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       limit: PRODUCTS_PAGE_SIZE,
       offset: 0,
     }),
+    getLabelDefault(shopId, "defaultTemplateId"),
+    getLabelDefault(shopId, "defaultLabelSizeId"),
   ]);
+  const defaultTemplateId = templates.find((template) => template.id === configuredTemplateId)?.id ?? templates[0]?.id ?? "";
+  const defaultTemplate = templates.find((template) => template.id === defaultTemplateId);
+  const defaultSizeId = sizes.find((size) => size.id === configuredSizeId)?.id
+    ?? sizes.find((size) => size.id === defaultTemplate?.sizeId)?.id ?? sizes[0]?.id ?? "";
 
   return {
     initialProducts: firstPage.products,
@@ -96,6 +103,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       rows: s.rows,
       gapXmm: s.gapXmm,
       gapYmm: s.gapYmm,
+      active: s.active,
     })),
     templates: templates.map((t) => ({
       id: t.id,
@@ -109,7 +117,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       barcodeTextFontSize: t.barcodeTextFontSize,
       barcodeWidthPct: t.barcodeWidthPct,
       barcodeHeightPct: t.barcodeHeightPct,
+      layout: t.layout,
+      showProductName: t.showProductName,
+      showVariantName: t.showVariantName,
+      showSku: t.showSku,
+      showPrice: t.showPrice,
+      showBarcodeText: t.showBarcodeText,
+      isDefault: t.id === defaultTemplateId,
     })),
+    defaultTemplateId,
+    defaultSizeId,
     barcodeType: config.type,
     barcodeLength: config.length,
   };
@@ -206,8 +223,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   // Re-validate everything from the cache; never trust client values.
   const [size, template, cacheRows, config] = await Promise.all([
-    prisma.labelSize.findFirst({ where: { id: sizeId, shopId: session.shop } }),
-    prisma.labelTemplate.findFirst({ where: { id: templateId, shopId: session.shop } }),
+    prisma.labelSize.findFirst({ where: { id: sizeId, shopId: session.shop, active: true } }),
+    prisma.labelTemplate.findFirst({ where: { id: templateId, shopId: session.shop, active: true } }),
     prisma.cachedVariant.findMany({
       where: { shopId: session.shop, gid: { in: selection } },
       select: {
@@ -255,15 +272,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       sizeId,
       templateId,
       sheetMode,
-      toggles: {
-        showProductTitle: String(form.get("showProductTitle") ?? "true") === "true",
-        showVariantTitle: String(form.get("showVariantTitle") ?? "true") === "true",
-        showSku: String(form.get("showSku") ?? "true") === "true",
-        showPrice: String(form.get("showPrice") ?? "true") === "true",
-        showBarcodeText: String(form.get("showBarcodeText") ?? "true") === "true",
+      toggles: Object.fromEntries([
+        ["showProductTitle", "showProductTitle"], ["showVariantTitle", "showVariantTitle"],
+        ["showSku", "showSku"], ["showPrice", "showPrice"], ["showBarcodeText", "showBarcodeText"],
+      ].map(([key, field]) => [key, String(form.get(field) ?? "false") === "true"])) as {
+        showProductTitle: boolean; showVariantTitle: boolean; showSku: boolean; showPrice: boolean; showBarcodeText: boolean;
       },
     },
-    { type: config.type, length: config.length },
+    { type: (template.barcodeType || config.type) as typeof config.type, length: config.length },
   );
 
   if (plan.exceedsTotalCap) {
@@ -297,6 +313,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       templateSnap: {
         name: template?.name ?? null,
         barcodeType: template?.barcodeType ?? null,
+        layout: template?.layout ?? "sheet",
         fontSize: template?.fontSize ?? null,
         nameFontSize: template?.nameFontSize ?? 0,
         skuFontSize: template?.skuFontSize ?? 0,
@@ -304,16 +321,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         barcodeTextFontSize: template?.barcodeTextFontSize ?? 0,
         barcodeWidthPct: template?.barcodeWidthPct ?? 0,
         barcodeHeightPct: template?.barcodeHeightPct ?? 0,
+        showProductName: template?.showProductName ?? true,
+        showVariantName: template?.showVariantName ?? true,
+        showSku: template?.showSku ?? true,
+        showPrice: template?.showPrice ?? false,
+        showBarcodeText: template?.showBarcodeText ?? true,
         variantTitles: Object.fromEntries(cacheRows.map((row) => [row.gid, row.title])),
         toggles: {
-          showProductTitle: String(form.get("showProductTitle") ?? "true") === "true",
-          showVariantTitle: String(form.get("showVariantTitle") ?? "true") === "true",
-          showSku: String(form.get("showSku") ?? "true") === "true",
-          showPrice: String(form.get("showPrice") ?? "true") === "true",
-          showBarcodeText: String(form.get("showBarcodeText") ?? "true") === "true",
+          showProductTitle: String(form.get("showProductTitle") ?? template?.showProductName ?? "true") === "true",
+          showVariantTitle: String(form.get("showVariantTitle") ?? template?.showVariantName ?? "true") === "true",
+          showSku: String(form.get("showSku") ?? template?.showSku ?? "true") === "true",
+          showPrice: String(form.get("showPrice") ?? template?.showPrice ?? "false") === "true",
+          showBarcodeText: String(form.get("showBarcodeText") ?? template?.showBarcodeText ?? "true") === "true",
         },
       },
       sizeSnap: {
+        sizeId: size?.id ?? null,
         name: size?.name ?? null,
         widthMm: size?.widthMm ?? null,
         heightMm: size?.heightMm ?? null,
@@ -421,8 +444,9 @@ export default function PrintLabelsPage() {
   }, []);
 
   // ----- print settings -----
-  const [sizeId, setSizeId] = useState(loaderData.sizes[0]?.id ?? "");
-  const [templateId, setTemplateId] = useState(loaderData.templates[0]?.id ?? "");
+  const initialTemplate = loaderData.templates.find((template) => template.id === loaderData.defaultTemplateId) ?? loaderData.templates[0];
+  const [sizeId, setSizeId] = useState(loaderData.defaultSizeId || initialTemplate?.sizeId || "");
+  const [templateId, setTemplateId] = useState(initialTemplate?.id ?? "");
   const [mode, setMode] = useState<QuantityMode>("stock");
   const [cappedQuantityGids, setCappedQuantityGids] = useState<Set<string>>(new Set());
   const [editingBarcode, setEditingBarcode] = useState<Record<string, string>>({});
@@ -430,10 +454,10 @@ export default function PrintLabelsPage() {
   const [savingBarcode, setSavingBarcode] = useState<Set<string>>(new Set());
   const cancelBarcodeSave = useRef(new Set<string>());
   const barcodeFetcher = useFetcher<typeof action>();
-  const [sheetMode, setSheetMode] = useState<"roll" | "grid">("roll");
-  const [toggles, setToggles] = useState(() =>
-    defaultTogglesForTemplate(loaderData.templates[0]?.name),
-  );
+  const [sheetMode, setSheetMode] = useState<"roll" | "grid">(initialTemplate ? templateLayoutToSheetMode(initialTemplate.layout) : "grid");
+  const [toggles, setToggles] = useState(() => initialTemplate ? templateInputToToggles(initialTemplate) : {
+    showProductTitle: true, showVariantTitle: true, showSku: true, showPrice: false, showBarcodeText: true,
+  });
   const previewSettingsRef = useRef({ sizeId, templateId, toggles });
   previewSettingsRef.current = { sizeId, templateId, toggles };
 
@@ -1242,7 +1266,11 @@ export default function PrintLabelsPage() {
                 const nextTemplateId = event.target.value;
                 setTemplateId(nextTemplateId);
                 const nextTemplate = loaderData.templates.find((template) => template.id === nextTemplateId);
-                setToggles(defaultTogglesForTemplate(nextTemplate?.name));
+                if (nextTemplate) {
+                  setToggles(templateInputToToggles(nextTemplate));
+                  setSizeId(nextTemplate.sizeId);
+                  setSheetMode(templateLayoutToSheetMode(nextTemplate.layout));
+                }
               }}
               style={{ display: "block", marginTop: 4 }}
             >

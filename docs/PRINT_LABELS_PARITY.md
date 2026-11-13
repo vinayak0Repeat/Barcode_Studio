@@ -200,3 +200,18 @@ Dev store with the synced catalog; measure Network tab request counts and payloa
 4. Should Reprint restore the job into the Print Labels screen (Odoo) or keep re-opening the print page (current)?
 5. Is per-row inline barcode editing wanted on Print Labels, or is the Generator modal enough?
 6. Pricelist-based prices on labels: needed on Shopify (would require reading Shopify price lists), or is the cached price sufficient?
+
+---
+
+## 8. Step 6-7 implementation status (2026-11-13)
+
+The label configuration work is now implemented in the Shopify app:
+
+- Templates and Label Sizes have shop-scoped list/editor CRUD, duplicate, archive/restore, default selection, usage counts, deletion guards, and previews. Validation is shared and repeated in server actions. Label dimensions remain millimeters, matching the Odoo model; Odoo has no separate unit field.
+- Print Labels loads active DB templates and sizes, starts from Settings-backed defaults, initializes toggles and sheet/roll mode from the selected template, and allows per-print overrides. The same stored template options and numeric overrides feed live preview and print rendering.
+- Retail and Retail 50x25 are initial defaults. Seed upserts use empty updates, so re-authentication does not replace edited configuration or a user's selected defaults. No schema change or migration was needed.
+- Existing jobs retain their snapshots. New label-size snapshots include the size ID; older snapshots without an ID are counted by their saved size name.
+- Root cause of the template-selection bug: the Shopify preview path selected hardcoded static presets by template name, so changing a DB template did not reliably feed its field toggles or numeric overrides into rendering. The template layout was also not carried into the print selection state. Rendering now receives the stored template configuration explicitly.
+- Verification in this workspace: direct `tsc --noEmit` passed; Vitest via `node.exe node_modules/vitest/vitest.mjs run --configLoader runner` passed (131 passed, 1 skipped). `npm.cmd run typecheck`, `npm.cmd test`, and `npm.cmd run build` could not load their configs because esbuild was denied access to the parent directory and could not resolve the config files in the restricted shell. Retry those package scripts in a shell with normal workspace-parent read access.
+
+Not ported in this work: Odoo's barcode/SKU generation and inventory editing from Print Labels, PDF attachment/report flow, per-product pricelists, uncapped quantities, and wider catalog browsing workflow. The Shopify write guard, engine, and sync paths were not changed.

@@ -117,6 +117,23 @@ export async function seedShop(shopId: string) {
     });
   }
 
+  // Settings-backed defaults mirror Odoo's config_parameter behavior.
+  // Empty updates keep a user's selected defaults stable on re-auth/seed.
+  const [defaultTemplate, defaultLabelSize] = await Promise.all([
+    prisma.labelTemplate.findUniqueOrThrow({ where: { shopId_name: { shopId, name: "Retail" } }, select: { id: true } }),
+    prisma.labelSize.findUniqueOrThrow({ where: { shopId_name: { shopId, name: "Retail 50x25" } }, select: { id: true } }),
+  ]);
+  for (const [key, value] of [
+    ["defaultTemplateId", defaultTemplate.id],
+    ["defaultLabelSizeId", defaultLabelSize.id],
+  ] as const) {
+    await prisma.setting.upsert({
+      where: { shopId_key: { shopId, key } },
+      update: {},
+      create: { shopId, key, value: value as unknown as object },
+    });
+  }
+
   // 4. Barcode Settings (idempotent: never overwrite existing rows)
   const settings: Array<{ key: string; value: string | number | boolean }> = [
     { key: "barcodePrefix", value: "99" },

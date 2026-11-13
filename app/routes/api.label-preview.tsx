@@ -4,7 +4,7 @@ import prisma from "../db.server";
 import { layoutJob } from "../services/labels/layout.server";
 import { renderLayoutHtml } from "../services/labels/html.server";
 import { formatPrice } from "../services/labels/formatPrice";
-import { defaultTogglesForTemplate } from "../services/labels/presets";
+import { templateInputToToggles } from "../services/labels/adminValidation.shared";
 
 /**
  * Live label preview: authenticated GET with gid + sizeId + templateId +
@@ -45,7 +45,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   // Template toggles, with URL overrides from the settings panel.
-  const defaultToggles = defaultTogglesForTemplate(template.name);
+  const defaultToggles = templateInputToToggles(template);
   const toggles = {
     showProductTitle:
       url.searchParams.get("showProductTitle") === null

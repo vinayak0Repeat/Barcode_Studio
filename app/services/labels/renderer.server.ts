@@ -2,7 +2,7 @@ import { validateValue, type BarcodeType } from "../barcode/validate.server";
 import { ptToMm } from "../../lib/mm";
 import { layoutJob, type LayoutDocument, type LayoutPage, type LabelPrimitive } from "./layout.server";
 import { renderLayoutHtml, escapeHtml } from "./html.server";
-import { LAYOUT_PRESETS, type LabelToggles } from "./presets";
+import type { LabelToggles } from "./presets";
 import { formatPrice } from "./formatPrice";
 
 /** Compatibility data helpers; all geometry and emission live in fit/layout/html. */
@@ -132,7 +132,7 @@ html, body { margin: 0 !important; padding: 0 !important; width: ${documentWidth
 export function renderLabelSvgOrHtml(
   data: LabelData,
   size: LabelSizeSpec,
-  toggles: LabelToggles = LAYOUT_PRESETS.Retail,
+  toggles: LabelToggles,
 ): LabelRenderResult {
   // Legacy callers may request inch CSS output; the shared geometry remains
   // millimeter-based, so a 25.4 mm size still represents one physical inch.
@@ -149,7 +149,17 @@ export function renderLabelSvgOrHtml(
         price: toggles.showPrice ? formatPrice(data.price ?? data.raw.price) : null,
         quantity: 1,
       }],
-      templateSnap: { barcodeType: data.barcodeType, toggles },
+      templateSnap: {
+        barcodeType: data.barcodeType,
+        fontSize: toggles.fontSize,
+        nameFontSize: toggles.nameFontSize,
+        skuFontSize: toggles.skuFontSize,
+        priceFontSize: toggles.priceFontSize,
+        barcodeTextFontSize: toggles.barcodeTextFontSize,
+        barcodeWidthPct: toggles.barcodeWidthPct,
+        barcodeHeightPct: toggles.barcodeHeightPct,
+        toggles,
+      },
       sizeSnap: { widthMm: size.widthMm * scale, heightMm: size.heightMm * scale, sheetMode: "roll" },
     });
     return { kind: "rendered", html: renderLayoutHtml(layout, { preview: true }) };

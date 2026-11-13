@@ -40,6 +40,7 @@ export interface LayoutSizeSnapshot {
 export interface LayoutTemplateSnapshot extends LabelTemplateOverrides {
   name?: string | null;
   barcodeType?: string | null;
+  layout?: string | null;
   toggles?: Partial<LabelLineToggles> | null;
 }
 
@@ -119,6 +120,7 @@ export function readLayoutSnapshot(job: {
   const templateSnap: LayoutTemplateSnapshot = {
     name: snapString(rawTemplate, "name"),
     barcodeType: snapString(rawTemplate, "barcodeType") ?? "code128",
+    layout: snapString(rawTemplate, "layout"),
     fontSize: snapNumber(rawTemplate, "fontSize"),
     nameFontSize: snapNumber(rawTemplate, "nameFontSize"),
     skuFontSize: snapNumber(rawTemplate, "skuFontSize"),
