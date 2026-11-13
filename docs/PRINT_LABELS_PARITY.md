@@ -168,14 +168,14 @@ Sources: `app/routes/app.print-labels.tsx`, `print.$jobId.tsx`, `app.print-histo
 6. **Generate barcodes for selection (guarded)** — button on this page calling the existing `generateForVariants` engine via a small action, then patching the level-2 cache from returned assignments. Verify: select missing-barcode variants → Generate → rows update in place, no full reload.
 
 ### P2 — feature parity gaps
-7. Qty stepper buttons + "Clear Qty" + (decision) default qty = stock.
-8. Inline barcode editing per row (blur-save via existing `setBarcode` action, duplicate errors as row-level banners).
-9. Preview stack: render every selected label copy client-side (geometry in JS; barcode via cached `/api/barcode-svg` URLs), replacing arrows.
-10. Barcode render fallback: retry with Code128 in `renderer.server.ts` / preview endpoint.
-11. Activity row on print (type "printed") + job sequence-style name (`BSP/` counter already seeded).
-12. Reprint → load job into Print Labels (restore selection/qty from PrintJobLine).
-13. Layout rework: fixed toolbar + two-column body with sticky preview (CSS/DOM only).
-14. Status pills per variant row (reuse `barcodeStatuses`).
+7. **Partial (in progress):** quantity stepper, zero quantity, Clear Qty menu, shared clamping, and stock-seeded selection are implemented; quantity action validation remains. No test run yet.
+8. **Partial (in progress):** barcode editing submits through guarded `setBarcode`, with inline save/error feedback; row-level Polaris banners, success state, and action tests remain.
+9. **Open:** preview still uses the single-label Prev/Next flow.
+10. **Partial:** the SVG endpoint retries Code128; print renderer already has barcode-vector fallback. Fallback notices and endpoint/renderer tests remain.
+11. **Partial:** print creation allocates `BSP/` names and writes one `printed` activity row with job/line creation; history/dashboard naming has been started. Test coverage remains.
+12. **Open:** Print History has an “Open in Print Labels” link, but job restoration is not implemented.
+13. **Open:** fixed toolbar and two-column sticky preview layout remain.
+14. **Partial:** visible variants load ready/missing/duplicate status through the grouped status helper; invalid status/reason details remain.
 
 ### P3 — polish
 15. Sever `window.opener` on the print tab.
@@ -194,7 +194,7 @@ Dev store with the synced catalog; measure Network tab request counts and payloa
 - **Inventory writes**: Odoo's inline stock editing maps to Shopify inventory mutations — a NEW write path outside the current write guard; needs its own decision/guard extension, not part of print parity.
 
 ## 7. Open questions (max 6)
-1. Odoo defaults label qty to on-hand stock; Shopify defaults to 1 (stock mode optional). Which default do you want?
+1. Resolved for this task: new selection defaults to on-hand stock, matching the Odoo behavior.
 2. Odoo auto-generates missing barcodes during Print; Shopify currently skips them (read-only guard by default). Auto-generate on print (respecting the write guard) or keep skipping?
 3. Keep Shopify's caps (500/variant, 2000/job — none exist in Odoo)?
 4. Should Reprint restore the job into the Print Labels screen (Odoo) or keep re-opening the print page (current)?

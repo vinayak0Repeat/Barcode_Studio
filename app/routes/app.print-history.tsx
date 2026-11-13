@@ -33,6 +33,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return {
     jobs: jobs.map((job) => ({
       id: job.id,
+      name: job.name,
       printedAt: job.printedAt.toISOString(),
       sizeName: ((job.sizeSnap ?? {}) as { name?: string }).name ?? "—",
       templateName: ((job.templateSnap ?? {}) as { name?: string }).name ?? "—",
@@ -119,7 +120,7 @@ export default function PrintHistoryPage() {
               {data.jobs.map((job) => (
                 <s-table-row key={job.id}>
                   <s-table-cell>
-                    {new Date(job.printedAt).toLocaleString()}
+                    {job.name}<br />{new Date(job.printedAt).toLocaleString()}
                   </s-table-cell>
                   <s-table-cell>{job.sizeName}</s-table-cell>
                   <s-table-cell>{job.templateName}</s-table-cell>
@@ -132,6 +133,7 @@ export default function PrintHistoryPage() {
                     </s-badge>
                   </s-table-cell>
                   <s-table-cell>
+                    <s-link href={`/app/print-labels?job=${encodeURIComponent(job.id)}`}>Open in Print Labels</s-link>
                     <s-button
                       variant="tertiary"
                       onClick={() => {

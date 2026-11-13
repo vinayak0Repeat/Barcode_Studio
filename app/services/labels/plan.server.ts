@@ -95,7 +95,9 @@ export function buildPrintPlan(
     totalCap: limits.totalCap,
   });
 
-  const lines: PlanLine[] = validGids.map((gid) => {
+  const lines: PlanLine[] = validGids
+    .filter((gid) => quantities.quantities[gid]! > 0)
+    .map((gid) => {
     const row = rowsByGid.get(gid)!;
     return {
       variantGid: gid,
@@ -106,7 +108,7 @@ export function buildPrintPlan(
       price: row.price,
       quantity: quantities.quantities[gid]!,
     };
-  });
+    });
 
   return {
     lines,

@@ -2,6 +2,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { bulkVariantsForProducts } from "../services/catalog/printLabels.server";
+import { barcodeStatuses } from "../services/barcode/status.server";
 
 /**
  * Level-2 variants for the Print Labels page.
@@ -30,7 +31,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   try {
     const variants = await bulkVariantsForProducts(prisma, session.shop, gids, q);
-    return new Response(JSON.stringify({ variants }), {
+    const statuses = await barcodeStatuses(session.shop, variants.map((variant) => variant.gid));
+    const withStatus = variants.map((variant) => ({ ...variant, barcodeStatus: statuses.get(variant.gid) ?? "missing" }));
+    return new Response(JSON.stringify({ variants: withStatus }), {
       status: 200,
       headers: { "content-type": "application/json", "cache-control": "no-store" },
     });

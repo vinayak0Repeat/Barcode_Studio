@@ -38,6 +38,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     prisma.cachedProduct.count({ where: { shopId } }),
     prisma.cachedVariant.count({ where: { shopId } }),
   ]);
+  const printedJobIds = recentActivity.filter((row) => row.type === "printed" && row.jobId).map((row) => row.jobId!);
+  const printedJobs = printedJobIds.length ? await prisma.printJob.findMany({
+    where: { shopId, id: { in: printedJobIds } }, select: { id: true, name: true },
+  }) : [];
+  const printedNameById = new Map(printedJobs.map((job) => [job.id, job.name]));
 
   return {
     shop: shopId,
@@ -56,6 +61,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     recentActivity: recentActivity.map((row) => ({
       id: row.id,
       type: row.type,
+      jobName: row.jobId ? printedNameById.get(row.jobId) ?? null : null,
       labelCount: row.labelCount,
       at: row.at.toISOString(),
     })),
@@ -221,7 +227,7 @@ export default function Index() {
           <s-unordered-list>
             {loaderData.recentActivity.map((row) => (
               <s-list-item key={row.id}>
-                {row.type} · {row.labelCount} barcode(s) · {relativeTime(row.at)}
+                {row.type === "printed" ? `Printed ${row.jobName ?? "labels"}` : row.type} · {row.labelCount} barcode(s) · {relativeTime(row.at)}
               </s-list-item>
             ))}
           </s-unordered-list>

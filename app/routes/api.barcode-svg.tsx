@@ -18,17 +18,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const bcid = allowedTypes.has(type) ? type : "code128";
 
   let svg: string;
+  let renderedType = bcid;
   try {
     if (!value) {
       throw new Error("missing value");
     }
-    svg = bwipjs.toSVG({
-      bcid,
-      text: value,
-      includetext: false,
-      scale: 2,
-      height: 8,
-    });
+    try {
+      svg = bwipjs.toSVG({ bcid, text: value, includetext: false, scale: 2, height: 8 });
+    } catch (primaryError) {
+      if (bcid === "code128") throw primaryError;
+      svg = bwipjs.toSVG({ bcid: "code128", text: value, includetext: false, scale: 2, height: 8 });
+      renderedType = "code128";
+    }
 
     // bwip-js emits only a viewBox (no width/height). Injected inline into
     // HTML, such an <svg> defaults to 100% of its container — the "huge
@@ -59,6 +60,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     headers: {
       "content-type": "image/svg+xml",
       "cache-control": "private, max-age=300",
+      ...(renderedType !== bcid ? { "x-barcode-fallback": "code128" } : {}),
     },
   });
 };

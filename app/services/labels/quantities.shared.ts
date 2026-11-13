@@ -30,6 +30,31 @@ export const DEFAULT_CAP_PER_VARIANT = 500;
 export const DEFAULT_TOTAL_CAP = 2000;
 export const WARN_ABOVE_TOTAL = 500;
 
+/** One clamp rule used by typed quantities, blur, steppers and stock defaults. */
+export function clampQuantity(value: number | string, cap = DEFAULT_CAP_PER_VARIANT): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.min(cap, Math.floor(parsed)));
+}
+
+export interface DefaultStockQuantity {
+  quantity: number;
+  capped: boolean;
+  zeroStock: boolean;
+}
+
+export function quantityFromStock(stock: number | null | undefined, cap = DEFAULT_CAP_PER_VARIANT): DefaultStockQuantity {
+  const floored = Math.max(0, Math.floor(Number.isFinite(stock) ? stock! : 0));
+  return { quantity: Math.min(floored, cap), capped: floored > cap, zeroStock: floored === 0 };
+}
+
+export function clearSelectedQuantities(
+  selected: ReadonlyMap<string, number>,
+  mode: "reset" | "zero",
+): Map<string, number> {
+  return new Map([...selected.keys()].map((gid) => [gid, mode === "reset" ? 1 : 0]));
+}
+
 export function computeQuantities(input: QuantityInput): QuantityResult {
   const capPerVariant = input.capPerVariant ?? DEFAULT_CAP_PER_VARIANT;
   const totalCap = input.totalCap ?? DEFAULT_TOTAL_CAP;
@@ -39,20 +64,11 @@ export function computeQuantities(input: QuantityInput): QuantityResult {
   let rawTotal = 0;
 
   for (const gid of input.gids) {
-    let qty: number;
-    if (input.mode === "stock") {
-      qty = Math.max(1, Math.floor(input.stockByGid[gid] ?? 0) || 1);
-      if (qty > capPerVariant) {
-        qty = capPerVariant;
-        cappedGids.push(gid);
-      }
-    } else {
-      qty = Math.max(1, Math.floor(input.requestedByGid[gid] ?? 1) || 1);
-      if (qty > capPerVariant) {
-        qty = capPerVariant;
-        cappedGids.push(gid);
-      }
-    }
+    const requested = Object.prototype.hasOwnProperty.call(input.requestedByGid, gid)
+      ? input.requestedByGid[gid]
+      : input.mode === "stock" ? input.stockByGid[gid] ?? 1 : 1;
+    if (Number.isFinite(requested) && requested > capPerVariant) cappedGids.push(gid);
+    const qty = clampQuantity(requested ?? 0, capPerVariant);
     quantities[gid] = qty;
     rawTotal += qty;
   }

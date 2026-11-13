@@ -8,14 +8,19 @@ import { data, useFetcher, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { Prisma } from "@prisma/client";
-import { generateForVariants, getBarcodeConfig } from "../services/barcode/engine.server";
+import { generateForVariants, getBarcodeConfig, setBarcode } from "../services/barcode/engine.server";
 import { fitLabel } from "../services/labels/fit";
 import { defaultTogglesForTemplate } from "../services/labels/presets";
 import { formatPrice } from "../services/labels/formatPrice";
 import { buildPrintPlan } from "../services/labels/plan.server";
 import { pdfUrlFor, printUrlFor } from "../services/labels/printToken.server";
+import { allocateBlock, formatValue } from "../services/barcode/sequence.server";
 import {
+  clampQuantity,
+  clearSelectedQuantities as clearSelectedQuantitiesMap,
+  DEFAULT_CAP_PER_VARIANT,
   DEFAULT_TOTAL_CAP,
+  quantityFromStock,
   WARN_ABOVE_TOTAL,
   type QuantityMode,
 } from "../services/labels/quantities.shared";
@@ -48,6 +53,7 @@ interface VariantDetail {
   price: string | null;
   inventoryQuantity: number | null;
   matched?: boolean;
+  barcodeStatus?: "ready" | "missing" | "duplicate";
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -119,12 +125,26 @@ interface ActionResult {
   printed?: number;
   skipped?: Array<{ variantGid: string; reason: string }>;
   generated?: Array<{ gid: string; barcode: string }>;
+  variantGid?: string;
+  barcode?: string;
 }
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
   const form = await request.formData();
   const intent = String(form.get("intent") ?? "");
+
+  if (intent === "editBarcode") {
+    const variantGid = String(form.get("variantGid") ?? "");
+    const value = String(form.get("value") ?? "");
+    if (!variantGid) return data({ ok: false, message: "Variant is required." } as ActionResult, { status: 400 });
+    try {
+      await setBarcode(session.shop, admin, variantGid, value);
+      return data({ ok: true, variantGid, barcode: value.trim(), message: "Barcode saved." } as ActionResult);
+    } catch (error) {
+      return data({ ok: false, variantGid, message: error instanceof Error ? error.message : String(error) } as ActionResult, { status: 400 });
+    }
+  }
 
   if (intent === "generate") {
     // P1 item 6: guarded engine, never overwrite, all-or-nothing.
@@ -168,8 +188,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const sheetMode = String(form.get("sheetMode") ?? "roll") === "grid" ? "grid" : "roll";
   const requested: Record<string, number> = {};
   for (const entry of form.getAll("qty")) {
-    const [gid, value] = String(entry).split("=");
-    if (gid && value) requested[gid] = Math.max(1, Number(value) || 1);
+    const serialized = String(entry);
+    const separator = serialized.lastIndexOf("=");
+    if (separator < 1) {
+      return data({ ok: false, message: "A selected quantity is malformed." } as ActionResult, { status: 400 });
+    }
+    const gid = serialized.slice(0, separator);
+    const value = Number(serialized.slice(separator + 1));
+    if (!Number.isInteger(value) || value < 0 || value > DEFAULT_CAP_PER_VARIANT) {
+      return data({
+        ok: false,
+        message: `Quantity for ${gid} must be a whole number from 0 to ${DEFAULT_CAP_PER_VARIANT}.`,
+      } as ActionResult, { status: 400 });
+    }
+    requested[gid] = value;
   }
 
   // Re-validate everything from the cache; never trust client values.
@@ -254,10 +286,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
   }
 
-  const job = await prisma.printJob.create({
+  const block = await allocateBlock(session.shop, "printjob", 1);
+  const jobName = formatValue("BSP/", 5, block.start);
+  const job = await prisma.$transaction(async (tx) => {
+  const created = await tx.printJob.create({
     data: {
       shopId: session.shop,
-      name: `Print labels ${new Date().toISOString().slice(0, 10)}`,
+      name: jobName,
       templateId: template?.id,
       templateSnap: {
         name: template?.name ?? null,
@@ -301,13 +336,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     },
   });
 
-  await prisma.printJobLine.createMany({
-    data: plan.lines.map((line) => ({ jobId: job.id, ...line })),
+  await tx.printJobLine.createMany({ data: plan.lines.map((line) => ({ jobId: created.id, ...line })) });
+  await tx.activity.create({ data: {
+    shopId: session.shop, type: "printed", jobId: created.id,
+    productCount: new Set(plan.lines.map((line) => line.productGid)).size,
+    labelCount: plan.labelCount,
+  } });
+  return created;
   });
 
   return data({
     ok: true,
-    message: `Print job ready: ${plan.labelCount} label(s) for ${plan.lines.length} variant(s).`,
+    message: `${job.name}: ${plan.labelCount} label(s) for ${plan.lines.length} variant(s).`,
     jobId: job.id,
     printUrl: printUrlFor(session.shop, job.id),
     pdfUrl: pdfUrlFor(session.shop, job.id),
@@ -383,7 +423,13 @@ export default function PrintLabelsPage() {
   // ----- print settings -----
   const [sizeId, setSizeId] = useState(loaderData.sizes[0]?.id ?? "");
   const [templateId, setTemplateId] = useState(loaderData.templates[0]?.id ?? "");
-  const [mode, setMode] = useState<QuantityMode>("fixed");
+  const [mode, setMode] = useState<QuantityMode>("stock");
+  const [cappedQuantityGids, setCappedQuantityGids] = useState<Set<string>>(new Set());
+  const [editingBarcode, setEditingBarcode] = useState<Record<string, string>>({});
+  const [barcodeErrors, setBarcodeErrors] = useState<Record<string, string>>({});
+  const [savingBarcode, setSavingBarcode] = useState<Set<string>>(new Set());
+  const cancelBarcodeSave = useRef(new Set<string>());
+  const barcodeFetcher = useFetcher<typeof action>();
   const [sheetMode, setSheetMode] = useState<"roll" | "grid">("roll");
   const [toggles, setToggles] = useState(() =>
     defaultTogglesForTemplate(loaderData.templates[0]?.name),
@@ -685,15 +731,24 @@ export default function PrintLabelsPage() {
   };
 
   // ----- selection helpers -----
-  const tickVariants = (variants: VariantDetail[], onlyBarcoded: boolean, qty = 1) => {
+  const quantityFor = (variant: VariantDetail) => mode === "stock"
+    ? quantityFromStock(variant.inventoryQuantity)
+    : { quantity: 1, capped: false, zeroStock: false };
+  const tickVariants = (variants: VariantDetail[], onlyBarcoded: boolean) => {
+    const capped = new Set<string>();
     setSelected((prev) => {
       const next = new Map(prev);
       for (const variant of variants) {
         if (onlyBarcoded && !variant.barcode) continue;
-        if (!next.has(variant.gid)) next.set(variant.gid, qty);
+        if (!next.has(variant.gid)) {
+          const initial = quantityFor(variant);
+          next.set(variant.gid, initial.quantity);
+          if (initial.capped) capped.add(variant.gid);
+        }
       }
       return next;
     });
+    if (capped.size) setCappedQuantityGids((prev) => new Set([...prev, ...capped]));
     setBarcodeByGid((prev) => {
       const next = new Map(prev);
       for (const variant of variants) next.set(variant.gid, variant.barcode);
@@ -701,22 +756,39 @@ export default function PrintLabelsPage() {
     });
   };
 
-  const toggleVariant = (gid: string, qty = 1) => {
+  const toggleVariant = (gid: string, qty?: number) => {
+    const variant = Object.values(variantCache).flat().find((item) => item.gid === gid);
+    const initial = variant ? quantityFor(variant) : { quantity: qty ?? 1, capped: false, zeroStock: false };
     setSelected((prev) => {
       const next = new Map(prev);
       if (next.has(gid)) next.delete(gid);
-      else next.set(gid, qty);
+      else next.set(gid, initial.quantity);
       return next;
     });
+    if (initial.capped) setCappedQuantityGids((prev) => new Set([...prev, gid]));
+    else setCappedQuantityGids((prev) => { const next = new Set(prev); next.delete(gid); return next; });
   };
 
-  const setQty = (gid: string, qty: number) => {
+  const setQty = (gid: string, qty: number | string) => {
+    const parsed = Number(qty);
+    const capped = Number.isFinite(parsed) && parsed > DEFAULT_CAP_PER_VARIANT;
     setSelected((prev) => {
       if (!prev.has(gid)) return prev;
       const next = new Map(prev);
-      next.set(gid, Math.max(1, Math.min(500, Math.floor(qty) || 1)));
+      next.set(gid, clampQuantity(qty));
       return next;
     });
+    setCappedQuantityGids((prev) => { const next = new Set(prev); capped ? next.add(gid) : next.delete(gid); return next; });
+  };
+
+  const clearQty = (kind: "reset" | "zero") => setSelected((prev) => clearSelectedQuantitiesMap(prev, kind));
+
+  const saveBarcode = (gid: string) => {
+    const value = editingBarcode[gid] ?? "";
+    setSavingBarcode((prev) => new Set([...prev, gid]));
+    setBarcodeErrors((prev) => { const next = { ...prev }; delete next[gid]; return next; });
+    const form = new FormData(); form.set("intent", "editBarcode"); form.set("variantGid", gid); form.set("value", value);
+    barcodeFetcher.submit(form, { method: "post" });
   };
 
   const parentCheckbox = async (product: PrintLabelProduct) => {
@@ -793,6 +865,27 @@ export default function PrintLabelsPage() {
     }
     printWindowRef.current = null;
   }, [fetcher.state, fetcher.data]);
+
+  useEffect(() => {
+    if (barcodeFetcher.state !== "idle" || !barcodeFetcher.data || !("variantGid" in barcodeFetcher.data)) return;
+    const { variantGid, ok } = barcodeFetcher.data;
+    if (!variantGid) return;
+    setSavingBarcode((prev) => { const next = new Set(prev); next.delete(variantGid); return next; });
+    if (!ok) {
+      setBarcodeErrors((prev) => ({ ...prev, [variantGid]: barcodeFetcher.data?.message ?? "Could not save barcode." }));
+      return;
+    }
+    const barcode = ("barcode" in barcodeFetcher.data ? barcodeFetcher.data.barcode : null) ?? "";
+    setBarcodeErrors((prev) => { const next = { ...prev }; delete next[variantGid]; return next; });
+    setVariantCache((prev) => Object.fromEntries(Object.entries(prev).map(([key, rows]) => [key, rows.map((row) => row.gid === variantGid ? { ...row, barcode } : row)])));
+    setBarcodeByGid((prev) => new Map(prev).set(variantGid, barcode));
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (!barcode) next.delete(variantGid);
+      return next;
+    });
+    setPreviewNonce((n) => n + 1);
+  }, [barcodeFetcher.state, barcodeFetcher.data]);
 
   // After a successful generate: patch ONLY the affected rows in place,
   // keep selection/scroll, refresh the preview.
@@ -901,6 +994,13 @@ export default function PrintLabelsPage() {
           <s-button variant="tertiary" onClick={() => void selectAllProducts()} {...(loadingMore || selectingAll || busy ? { disabled: true } : {})}>
             Select all products
           </s-button>
+          <details>
+            <summary>Clear Qty</summary>
+            <div style={{ display: "flex", gap: 8, padding: 8 }}>
+              <button type="button" onClick={() => clearQty("reset")}>Reset to 1</button>
+              <button type="button" onClick={() => clearQty("zero")}>Set to 0</button>
+            </div>
+          </details>
           <s-button
             variant="primary"
             onClick={() => showModal(GENERATE_MODAL_ID)}
@@ -1041,25 +1141,55 @@ export default function PrintLabelsPage() {
                         <span data-variant-match={variant.matched ? "true" : undefined}>
                           {variant.title ?? "—"}
                         </span>
+                        <s-badge tone={variant.barcodeStatus === "duplicate" ? "critical" : variant.barcodeStatus === "missing" ? "caution" : "success"}>
+                          {variant.barcodeStatus === "duplicate" ? "Duplicate" : variant.barcodeStatus === "missing" ? "Missing" : "Ready"}
+                        </s-badge>
                       </s-table-cell>
                       <s-table-cell>{variant.sku ?? "—"}</s-table-cell>
                       <s-table-cell>
-                        <span style={{ fontFamily: "monospace" }}>{variant.barcode ?? "—"}</span>
+                        <input
+                          aria-label={`Barcode for ${variant.title ?? "variant"}`}
+                          value={editingBarcode[variant.gid] ?? variant.barcode ?? ""}
+                          disabled={savingBarcode.has(variant.gid)}
+                          onFocus={() => setEditingBarcode((prev) => ({ ...prev, [variant.gid]: variant.barcode ?? "" }))}
+                          onChange={(event) => setEditingBarcode((prev) => ({ ...prev, [variant.gid]: event.target.value }))}
+                          onBlur={() => {
+                            if (cancelBarcodeSave.current.delete(variant.gid)) return;
+                            if ((editingBarcode[variant.gid] ?? variant.barcode ?? "") !== (variant.barcode ?? "")) saveBarcode(variant.gid);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") { event.preventDefault(); (event.currentTarget as HTMLInputElement).blur(); }
+                            if (event.key === "Escape") { cancelBarcodeSave.current.add(variant.gid); setEditingBarcode((prev) => ({ ...prev, [variant.gid]: variant.barcode ?? "" })); (event.currentTarget as HTMLInputElement).blur(); }
+                          }}
+                          style={{ fontFamily: "monospace", width: 150 }}
+                        />
+                        <small>Code128, length {loaderData.barcodeLength}; must be unique</small>
+                        {savingBarcode.has(variant.gid) && <small> Saving…</small>}
+                        {barcodeErrors[variant.gid] && <div role="alert" style={{ color: "#b42318" }}>{barcodeErrors[variant.gid]}</div>}
                       </s-table-cell>
                       <s-table-cell>{variant.price ?? "—"}</s-table-cell>
                       <s-table-cell>{variant.inventoryQuantity ?? "—"}</s-table-cell>
                       <s-table-cell>
                         {selected.has(variant.gid) && (
+                          <>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                          <button type="button" aria-label={`Decrease quantity for ${variant.title ?? "variant"}`} onClick={() => setQty(variant.gid, (selected.get(variant.gid) ?? 0) - 1)}>−</button>
                           <input
                             type="number"
-                            min={1}
-                            max={500}
+                            min={0}
+                            max={DEFAULT_CAP_PER_VARIANT}
+                            step={1}
                             aria-label={`Quantity for ${variant.title ?? "variant"}`}
                             value={selected.get(variant.gid)}
-                            onChange={(event) => setQty(variant.gid, Number(event.target.value))}
+                            onChange={(event) => setQty(variant.gid, event.target.value)}
+                            onBlur={(event) => setQty(variant.gid, event.target.value)}
                             style={{ width: 72 }}
-                            disabled={mode === "stock"}
                           />
+                          <button type="button" aria-label={`Increase quantity for ${variant.title ?? "variant"}`} onClick={() => setQty(variant.gid, (selected.get(variant.gid) ?? 0) + 1)}>+</button>
+                          </span>
+                          {cappedQuantityGids.has(variant.gid) && <small>capped at {DEFAULT_CAP_PER_VARIANT}</small>}
+                          {variant.inventoryQuantity === 0 && <small style={{ color: "#777" }}>0 stock</small>}
+                          </>
                         )}
                       </s-table-cell>
                     </s-table-row>

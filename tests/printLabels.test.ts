@@ -6,6 +6,7 @@ import {
   groupVariantsByProduct,
   variantCacheKey,
 } from "../app/services/labels/printLabelsShared";
+import { clampQuantity, clearSelectedQuantities, computeQuantities, quantityFromStock } from "../app/services/labels/quantities.shared";
 import {
   bulkVariantsForProducts,
   listProductsPage,
@@ -84,6 +85,17 @@ function makeRepo(): PrintLabelsRepo {
 }
 
 describe("Print Labels shared helpers", () => {
+  it("clamps quantities, supports clearing to zero, and seeds stock defaults within caps", () => {
+    expect(clampQuantity("-2")).toBe(0);
+    expect(clampQuantity("501")).toBe(500);
+    expect(clampQuantity("2.9")).toBe(2);
+    expect(clearSelectedQuantities(new Map([["a", 4], ["b", 0]]), "zero")).toEqual(new Map([["a", 0], ["b", 0]]));
+    expect(clearSelectedQuantities(new Map([["a", 4]]), "reset")).toEqual(new Map([["a", 1]]));
+    expect(quantityFromStock(0)).toEqual({ quantity: 0, capped: false, zeroStock: true });
+    expect(quantityFromStock(600)).toEqual({ quantity: 500, capped: true, zeroStock: false });
+    expect(computeQuantities({ mode: "stock", stockByGid: { a: 0, b: 600 }, requestedByGid: {}, gids: ["a", "b"] }))
+      .toMatchObject({ quantities: { a: 0, b: 500 }, cappedGids: ["b"], total: 500 });
+  });
   it("builds stable preview keys and excludes quantity", () => {
     const input = { gid: "v1", sizeId: "s1", templateId: "t1", toggles };
     expect(buildPreviewKey(input)).toBe(buildPreviewKey({ ...input, toggles: { ...toggles } }));
