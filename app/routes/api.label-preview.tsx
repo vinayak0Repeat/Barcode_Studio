@@ -1,12 +1,10 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { getBarcodeConfig } from "../services/barcode/engine.server";
-import {
-  renderVariantLabel,
-  type LabelToggles,
-  LAYOUT_PRESETS,
-} from "../services/labels/renderer.server";
+import { layoutJob } from "../services/labels/layout.server";
+import { renderLayoutHtml } from "../services/labels/html.server";
+import { formatPrice } from "../services/labels/formatPrice";
+import { defaultTogglesForTemplate } from "../services/labels/presets";
 
 /**
  * Live label preview: authenticated GET with gid + sizeId + templateId +
@@ -24,7 +22,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     return new Response("Missing gid, sizeId or templateId", { status: 400 });
   }
 
-  const [variant, size, template, config] = await Promise.all([
+  const [variant, size, template] = await Promise.all([
     prisma.cachedVariant.findFirst({
       where: { shopId: session.shop, gid },
       select: {
@@ -40,7 +38,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     prisma.labelTemplate.findFirst({
       where: { id: templateId, shopId: session.shop },
     }),
-    getBarcodeConfig(session.shop),
   ]);
 
   if (!variant || !size || !template) {
@@ -48,28 +45,28 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   // Template toggles, with URL overrides from the settings panel.
-  const toggles: LabelToggles = {
+  const defaultToggles = defaultTogglesForTemplate(template.name);
+  const toggles = {
     showProductTitle:
       url.searchParams.get("showProductTitle") === null
-        ? template.showProductName
+        ? defaultToggles.showProductTitle
         : url.searchParams.get("showProductTitle") === "true",
     showVariantTitle:
       url.searchParams.get("showVariantTitle") === null
-        ? template.showVariantName
+        ? defaultToggles.showVariantTitle
         : url.searchParams.get("showVariantTitle") === "true",
     showSku:
       url.searchParams.get("showSku") === null
-        ? template.showSku
+        ? defaultToggles.showSku
         : url.searchParams.get("showSku") === "true",
     showPrice:
       url.searchParams.get("showPrice") === null
-        ? template.showPrice
+        ? defaultToggles.showPrice
         : url.searchParams.get("showPrice") === "true",
     showBarcodeText:
       url.searchParams.get("showBarcodeText") === null
-        ? template.showBarcodeText
+        ? defaultToggles.showBarcodeText
         : url.searchParams.get("showBarcodeText") === "true",
-    fontSize: template.fontSize,
   };
 
   const product = await prisma.cachedProduct.findUnique({
@@ -77,29 +74,51 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     select: { title: true },
   });
 
-  const result = renderVariantLabel(
-    {
-      gid: variant.gid,
-      productTitle: product?.title ?? null,
-      variantTitle: variant.title,
-      sku: variant.sku,
-      barcode: variant.barcode,
-      price: variant.price,
-    },
-    { widthMm: size.widthMm, heightMm: size.heightMm },
-    toggles,
-    { type: config.type, length: config.length },
-  );
-
-  if (result.kind === "skipped") {
+  if (!variant.barcode) {
     return new Response(
-      `<div style="padding:8mm;font-family:sans-serif;background:#fff;color:#333;">Skipped: ${result.reason}</div>`,
+      `<div style="padding:8mm;font-family:sans-serif;background:#fff;color:#333;">Skipped: barcode is missing.</div>`,
       { status: 200, headers: { "content-type": "text/html; charset=utf-8" } },
     );
   }
-
-  void LAYOUT_PRESETS;
-  return new Response(result.html, {
+  const layout = layoutJob({
+    lines: [{
+      variantGid: variant.gid,
+      productGid: variant.productGid,
+      productName: product?.title ?? null,
+      variantTitle: variant.title === "Default Title" ? null : variant.title,
+      sku: variant.sku,
+      barcode: variant.barcode,
+      price: formatPrice(variant.price),
+      quantity: 1,
+    }],
+    templateSnap: {
+      name: template.name,
+      barcodeType: template.barcodeType,
+      fontSize: template.fontSize,
+      nameFontSize: template.nameFontSize,
+      skuFontSize: template.skuFontSize,
+      priceFontSize: template.priceFontSize,
+      barcodeTextFontSize: template.barcodeTextFontSize,
+      barcodeWidthPct: template.barcodeWidthPct,
+      barcodeHeightPct: template.barcodeHeightPct,
+      toggles,
+    },
+    sizeSnap: {
+      name: size.name,
+      widthMm: size.widthMm,
+      heightMm: size.heightMm,
+      marginTop: size.marginTop,
+      marginRight: size.marginRight,
+      marginBottom: size.marginBottom,
+      marginLeft: size.marginLeft,
+      gapXmm: size.gapXmm,
+      gapYmm: size.gapYmm,
+      columns: size.columns,
+      rows: size.rows,
+      sheetMode: "roll",
+    },
+  });
+  return new Response(renderLayoutHtml(layout, { preview: true }), {
     status: 200,
     headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
   });

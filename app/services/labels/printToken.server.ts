@@ -52,6 +52,14 @@ export type PrintTokenVerification =
   | { ok: true; shop: string; jobId: string }
   | { ok: false; reason: "malformed" | "bad-signature" | "expired" };
 
+/** Pure final ownership check after the token-bound shop/job row is fetched. */
+export function printTokenMatchesJob(
+  verification: PrintTokenVerification,
+  job: { id: string; shopId: string },
+): boolean {
+  return verification.ok && verification.jobId === job.id && verification.shop === job.shopId;
+}
+
 export function verifyPrintToken(
   token: string | null | undefined,
   jobId: string,
@@ -94,4 +102,9 @@ export function verifyPrintToken(
 /** Signed print URL for a job (used by actions and Reprint). */
 export function printUrlFor(shopDomain: string, jobId: string): string {
   return `/print/${jobId}?t=${signPrintToken(shopDomain, jobId)}`;
+}
+
+/** Signed URL for on-demand PDF rendering from the same immutable job snapshot. */
+export function pdfUrlFor(shopDomain: string, jobId: string): string {
+  return `/pdf/${jobId}?t=${signPrintToken(shopDomain, jobId)}`;
 }

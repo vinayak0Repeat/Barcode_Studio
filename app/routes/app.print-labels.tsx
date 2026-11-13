@@ -9,8 +9,11 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { Prisma } from "@prisma/client";
 import { generateForVariants, getBarcodeConfig } from "../services/barcode/engine.server";
+import { fitLabel } from "../services/labels/fit";
+import { defaultTogglesForTemplate } from "../services/labels/presets";
+import { formatPrice } from "../services/labels/formatPrice";
 import { buildPrintPlan } from "../services/labels/plan.server";
-import { printUrlFor } from "../services/labels/printToken.server";
+import { pdfUrlFor, printUrlFor } from "../services/labels/printToken.server";
 import {
   DEFAULT_TOTAL_CAP,
   WARN_ABOVE_TOTAL,
@@ -79,6 +82,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       name: s.name,
       widthMm: s.widthMm,
       heightMm: s.heightMm,
+      marginTop: s.marginTop,
+      marginRight: s.marginRight,
+      marginBottom: s.marginBottom,
+      marginLeft: s.marginLeft,
       columns: s.columns,
       rows: s.rows,
       gapXmm: s.gapXmm,
@@ -89,6 +96,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       name: t.name,
       sizeId: t.sizeId,
       barcodeType: t.barcodeType,
+      fontSize: t.fontSize,
+      nameFontSize: t.nameFontSize,
+      skuFontSize: t.skuFontSize,
+      priceFontSize: t.priceFontSize,
+      barcodeTextFontSize: t.barcodeTextFontSize,
+      barcodeWidthPct: t.barcodeWidthPct,
+      barcodeHeightPct: t.barcodeHeightPct,
     })),
     barcodeType: config.type,
     barcodeLength: config.length,
@@ -100,6 +114,8 @@ interface ActionResult {
   message: string;
   jobId?: string;
   printUrl?: string;
+  pdfUrl?: string;
+  outputFormat?: "print" | "pdf";
   printed?: number;
   skipped?: Array<{ variantGid: string; reason: string }>;
   generated?: Array<{ gid: string; barcode: string }>;
@@ -146,6 +162,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const mode = (String(form.get("mode") ?? "fixed")) as QuantityMode;
+  const outputFormat = String(form.get("outputFormat") ?? "print") === "pdf" ? "pdf" : "print";
   const sizeId = String(form.get("sizeId") ?? "");
   const templateId = String(form.get("templateId") ?? "");
   const sheetMode = String(form.get("sheetMode") ?? "roll") === "grid" ? "grid" : "roll";
@@ -173,6 +190,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }),
     getBarcodeConfig(session.shop),
   ]);
+  if (!size) {
+    return data({ ok: false, message: "Choose a label size that exists for this shop." } as ActionResult, { status: 400 });
+  }
+  if (!template) {
+    return data({ ok: false, message: "Choose a label template that exists for this shop." } as ActionResult, { status: 400 });
+  }
+  if (!Number.isFinite(size.widthMm) || !Number.isFinite(size.heightMm) || size.widthMm <= 0 || size.heightMm <= 0) {
+    return data({ ok: false, message: "The selected label size must have positive width and height." } as ActionResult, { status: 400 });
+  }
   const products = await prisma.cachedProduct.findMany({
     where: { shopId: session.shop, gid: { in: cacheRows.map((r) => r.productGid) } },
     select: { gid: true, title: true },
@@ -236,6 +262,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       templateSnap: {
         name: template?.name ?? null,
         barcodeType: template?.barcodeType ?? null,
+        fontSize: template?.fontSize ?? null,
+        nameFontSize: template?.nameFontSize ?? 0,
+        skuFontSize: template?.skuFontSize ?? 0,
+        priceFontSize: template?.priceFontSize ?? 0,
+        barcodeTextFontSize: template?.barcodeTextFontSize ?? 0,
+        barcodeWidthPct: template?.barcodeWidthPct ?? 0,
+        barcodeHeightPct: template?.barcodeHeightPct ?? 0,
+        variantTitles: Object.fromEntries(cacheRows.map((row) => [row.gid, row.title])),
         toggles: {
           showProductTitle: String(form.get("showProductTitle") ?? "true") === "true",
           showVariantTitle: String(form.get("showVariantTitle") ?? "true") === "true",
@@ -248,6 +282,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         name: size?.name ?? null,
         widthMm: size?.widthMm ?? null,
         heightMm: size?.heightMm ?? null,
+        marginTop: size?.marginTop ?? null,
+        marginRight: size?.marginRight ?? null,
+        marginBottom: size?.marginBottom ?? null,
+        marginLeft: size?.marginLeft ?? null,
         columns: size?.columns ?? null,
         rows: size?.rows ?? null,
         gapXmm: size?.gapXmm ?? null,
@@ -272,6 +310,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     message: `Print job ready: ${plan.labelCount} label(s) for ${plan.lines.length} variant(s).`,
     jobId: job.id,
     printUrl: printUrlFor(session.shop, job.id),
+    pdfUrl: pdfUrlFor(session.shop, job.id),
+    outputFormat,
     printed: plan.labelCount,
     skipped: plan.skipped,
   } as ActionResult);
@@ -345,13 +385,9 @@ export default function PrintLabelsPage() {
   const [templateId, setTemplateId] = useState(loaderData.templates[0]?.id ?? "");
   const [mode, setMode] = useState<QuantityMode>("fixed");
   const [sheetMode, setSheetMode] = useState<"roll" | "grid">("roll");
-  const [toggles, setToggles] = useState({
-    showProductTitle: true,
-    showVariantTitle: true,
-    showSku: true,
-    showPrice: true,
-    showBarcodeText: true,
-  });
+  const [toggles, setToggles] = useState(() =>
+    defaultTogglesForTemplate(loaderData.templates[0]?.name),
+  );
   const previewSettingsRef = useRef({ sizeId, templateId, toggles });
   previewSettingsRef.current = { sizeId, templateId, toggles };
 
@@ -375,6 +411,30 @@ export default function PrintLabelsPage() {
   const previewKey = previewGid
     ? buildPreviewKey({ gid: previewGid, sizeId, templateId, toggles })
     : "";
+  const previewVariant = previewGid
+    ? Object.values(variantCache).flat().find((variant) => variant.gid === previewGid)
+    : undefined;
+  const previewProduct = previewVariant
+    ? products.find((product) => product.gid === previewVariant.productGid)
+    : undefined;
+  const previewSize = loaderData.sizes.find((size) => size.id === sizeId);
+  const previewTemplate = loaderData.templates.find((template) => template.id === templateId);
+  const previewGeometry = previewVariant?.barcode && previewSize && previewTemplate
+    ? fitLabel({
+        widthMm: previewSize.widthMm,
+        heightMm: previewSize.heightMm,
+        lines: {
+          name: previewProduct?.title,
+          variant: previewVariant.title === "Default Title" ? null : previewVariant.title,
+          sku: previewVariant.sku,
+          price: formatPrice(previewVariant.price),
+          barcodeText: previewVariant.barcode,
+        },
+        toggles,
+        overrides: previewTemplate,
+        barcodeValue: previewVariant.barcode,
+      })
+    : null;
 
   useEffect(() => {
     const requestId = previewGuard.current.start();
@@ -719,9 +779,12 @@ export default function PrintLabelsPage() {
     setResult(fetcher.data);
 
     const printWindow = printWindowRef.current;
-    if (fetcher.data.ok && fetcher.data.printUrl) {
+    const destination = fetcher.data.outputFormat === "pdf"
+      ? fetcher.data.pdfUrl
+      : fetcher.data.printUrl;
+    if (fetcher.data.ok && destination) {
       if (printWindow && !printWindow.closed) {
-        printWindow.location.href = fetcher.data.printUrl;
+        printWindow.location.href = destination;
       } else {
         setPopupBlocked(true);
       }
@@ -776,7 +839,7 @@ export default function PrintLabelsPage() {
     setPreviewNonce((n) => n + 1);
   }, [fetcher.state, fetcher.data]);
 
-  const submitPrint = () => {
+  const submitPrint = (outputFormat: "print" | "pdf") => {
     printWindowRef.current = window.open("", "_blank");
     if (printWindowRef.current) {
       printWindowRef.current.document.write(
@@ -785,6 +848,7 @@ export default function PrintLabelsPage() {
     }
     const form = new FormData();
     form.set("intent", "print");
+    form.set("outputFormat", outputFormat);
     for (const [gid, qty] of selected) {
       form.append("gids", gid);
       form.append("qty", `${gid}=${qty}`);
@@ -1044,7 +1108,12 @@ export default function PrintLabelsPage() {
             Template
             <select
               value={templateId}
-              onChange={(event) => setTemplateId(event.target.value)}
+              onChange={(event) => {
+                const nextTemplateId = event.target.value;
+                setTemplateId(nextTemplateId);
+                const nextTemplate = loaderData.templates.find((template) => template.id === nextTemplateId);
+                setToggles(defaultTogglesForTemplate(nextTemplate?.name));
+              }}
               style={{ display: "block", marginTop: 4 }}
             >
               {loaderData.templates.map((template) => (
@@ -1159,6 +1228,9 @@ export default function PrintLabelsPage() {
               </s-button>
             </s-stack>
             <div
+              data-fit-label-width-mm={previewGeometry?.widthMm}
+              data-fit-label-height-mm={previewGeometry?.heightMm}
+              title={previewGeometry ? `Fitted preview: ${previewGeometry.widthMm} × ${previewGeometry.heightMm} mm; ${previewGeometry.lines.length} text lines` : undefined}
               style={{
                 background: "#ffffff",
                 border: "1px solid #e0e0e0",
@@ -1182,8 +1254,8 @@ export default function PrintLabelsPage() {
           )}
           {result.jobId && result.printUrl && (
             <s-stack direction="inline" gap="base">
-              <s-button variant="tertiary" onClick={() => openPrint(result.printUrl!)}>
-                Open print page
+              <s-button variant="tertiary" onClick={() => openPrint(result.outputFormat === "pdf" ? result.pdfUrl! : result.printUrl!)}>
+                {result.outputFormat === "pdf" ? "Open PDF" : "Open print page"}
               </s-button>
               <s-link href="/app/print-history">Print History</s-link>
             </s-stack>
@@ -1195,8 +1267,10 @@ export default function PrintLabelsPage() {
       )}
       {popupBlocked && result?.printUrl && (
         <s-banner tone="warning">
-          The print window was blocked by the browser.{" "}
-          <s-link href={result.printUrl}>Open the print page</s-link>
+          The new tab was blocked by the browser.{" "}
+          <s-link href={result.outputFormat === "pdf" ? result.pdfUrl : result.printUrl}>
+            {result.outputFormat === "pdf" ? "Open the PDF" : "Open the print page"}
+          </s-link>
         </s-banner>
       )}
 
@@ -1220,12 +1294,19 @@ export default function PrintLabelsPage() {
           </strong>
           <s-button
             variant="primary"
-            onClick={submitPrint}
+            onClick={() => submitPrint("print")}
             {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0
               ? { disabled: true }
               : {})}
           >
             Print labels
+          </s-button>
+          <s-button
+            variant="tertiary"
+            onClick={() => submitPrint("pdf")}
+            {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true } : {})}
+          >
+            Save PDF
           </s-button>
           <s-button variant="tertiary" onClick={() => setSelected(new Map())}>
             Clear

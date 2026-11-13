@@ -6,6 +6,8 @@ import {
   LAYOUT_PRESETS,
   type VariantLabelInput,
 } from "../app/services/labels/renderer.server";
+import { formatPrice, LABEL_CURRENCY_SYMBOL } from "../app/services/labels/formatPrice";
+import { defaultTogglesForTemplate } from "../app/services/labels/presets";
 import {
   computeQuantities,
   computeSheetLayout,
@@ -44,6 +46,56 @@ describe("buildLabelData", () => {
     expect(result.kind === "ok" && result.data.variantTitle).toBeNull();
   });
 
+  it("uses the Retail defaults and still allows title and variant toggles", () => {
+    expect(LAYOUT_PRESETS.Retail).toMatchObject({
+      showProductTitle: false,
+      showVariantTitle: false,
+      showSku: false,
+      showPrice: true,
+      showBarcodeText: true,
+    });
+    expect(defaultTogglesForTemplate("Retail")).toMatchObject({
+      showProductTitle: false,
+      showVariantTitle: false,
+      showSku: false,
+      showPrice: true,
+      showBarcodeText: true,
+    });
+    const retailBuilt = buildLabelData({ ...variant, productTitle: "Cedar Candle", price: "885.95" }, LAYOUT_PRESETS.Retail, barcodeRules);
+    expect(retailBuilt.kind).toBe("ok");
+    if (retailBuilt.kind !== "ok") return;
+    const retail = renderLabelSvgOrHtml(retailBuilt.data, { widthMm: 50, heightMm: 25 }, LAYOUT_PRESETS.Retail);
+    expect(retail.kind).toBe("rendered");
+    if (retail.kind !== "rendered") return;
+    expect(retail.html).not.toContain("Cedar Candle");
+    expect(retail.html).not.toContain("Small / Red");
+    expect(retail.html).toContain("$885.95");
+    expect(retail.html).toContain("990000000001");
+
+    const details = renderLabelSvgOrHtml(retailBuilt.data, { widthMm: 50, heightMm: 25 }, {
+      ...LAYOUT_PRESETS.Retail,
+      showProductTitle: true,
+      showVariantTitle: true,
+    });
+    expect(details.kind === "rendered" && details.html).toContain("Cedar Candle");
+    expect(details.kind === "rendered" && details.html).toContain("Small / Red");
+
+    const defaultTitle = buildLabelData({ ...variant, productTitle: "Default title product", variantTitle: "Default Title" }, LAYOUT_PRESETS.Retail, barcodeRules);
+    expect(defaultTitle.kind === "ok" && defaultTitle.data.variantTitle).toBeNull();
+    if (defaultTitle.kind === "ok") {
+      const defaultRendered = renderLabelSvgOrHtml(defaultTitle.data, { widthMm: 50, heightMm: 25 }, LAYOUT_PRESETS.Retail);
+      expect(defaultRendered.kind === "rendered" && defaultRendered.html).not.toContain("Default Title");
+      expect(defaultRendered.kind === "rendered" && defaultRendered.html).not.toContain("Default title product");
+    }
+  });
+
+  it("formats label prices with one shared currency symbol and two decimals", () => {
+    expect(LABEL_CURRENCY_SYMBOL).toBe("$");
+    expect(formatPrice("885.95")).toBe("$885.95");
+    expect(formatPrice("885")).toBe("$885.00");
+    expect(formatPrice(null)).toBeNull();
+  });
+
   it("toggles hide fields", () => {
     const result = buildLabelData(variant, LAYOUT_PRESETS.Small, barcodeRules);
     expect(result.kind === "ok" && result.data.title).toBeNull();
@@ -77,7 +129,7 @@ describe("renderLabelSvgOrHtml", () => {
     expect(result.html).toContain("990000000001"); // barcode text or svg
   });
 
-  it("renders inch sizes correctly converted", () => {
+  it("keeps inch-specified physical sizes in the shared millimeter geometry", () => {
     const built = buildLabelData(variant, LAYOUT_PRESETS.Retail, barcodeRules);
     const result = renderLabelSvgOrHtml(
       built.kind === "ok" ? built.data : null!,
@@ -86,15 +138,15 @@ describe("renderLabelSvgOrHtml", () => {
     );
     expect(result.kind).toBe("rendered");
     if (result.kind !== "rendered") return;
-    expect(result.html).toContain("width:1.000in");
-    expect(result.html).toContain("height:1.000in");
+    expect(result.html).toContain("width:25.40mm");
+    expect(result.html).toContain("height:25.40mm");
   });
 
-  it("truncates long titles with a 2-line clamp, never overflowing", () => {
+  it("shrinks and ellipsizes long titles instead of overflowing", () => {
     const long = { ...variant, productTitle: "A".repeat(500) };
     const built = buildLabelData(long, LAYOUT_PRESETS.Shelf, barcodeRules);
     const result = renderLabelSvgOrHtml(built.kind === "ok" ? built.data : null!, size, LAYOUT_PRESETS.Shelf);
-    expect(result.kind === "rendered" && result.html).toContain("-webkit-line-clamp:2");
+    expect(result.kind === "rendered" && result.html).toContain("…");
     expect(result.kind === "rendered" && result.html).toContain("overflow:hidden");
   });
 
@@ -117,7 +169,7 @@ describe("renderLabelSvgOrHtml", () => {
       ...LAYOUT_PRESETS.Shelf,
       showBarcodeText: false,
     });
-    // barcode value only appears inside the SVG path data (no text node)
+    // The barcode value must not be emitted as a text run when the toggle is off.
     expect(
       noText.kind === "rendered" && noText.html.includes(">990000000001<"),
     ).toBe(false);

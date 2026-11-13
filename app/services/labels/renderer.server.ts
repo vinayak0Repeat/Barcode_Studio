@@ -1,19 +1,11 @@
-import bwipjs from "@bwip-js/node";
 import { validateValue, type BarcodeType } from "../barcode/validate.server";
+import { ptToMm } from "../../lib/mm";
+import { layoutJob, type LayoutDocument, type LayoutPage, type LabelPrimitive } from "./layout.server";
+import { renderLayoutHtml, escapeHtml } from "./html.server";
+import { LAYOUT_PRESETS, type LabelToggles } from "./presets";
+import { formatPrice } from "./formatPrice";
 
-/**
- * Minimal label renderer (Step 7). PURE functions only — this module is the
- * single place Step 6 replaces with a proper label/PDF engine.
- *
- * Layout: the seeded Template rows express field VISIBILITY (toggles) and
- * font size, not free positions. We therefore use one stacking layout:
- * optional text lines above the barcode (product title, variant title, SKU,
- * price), the barcode centered and auto-fitted, and optional human-readable
- * barcode text beneath. Three named presets map seeded template names onto
- * toggle sets. Positions are NOT expressible today (reported as a Step 6
- * task).
- */
-
+/** Compatibility data helpers; all geometry and emission live in fit/layout/html. */
 export const MM_PER_INCH = 25.4;
 
 export interface VariantLabelInput {
@@ -27,63 +19,13 @@ export interface VariantLabelInput {
   vendor?: string | null;
 }
 
-export interface LabelToggles {
-  showProductTitle: boolean;
-  showVariantTitle: boolean;
-  showSku: boolean;
-  showPrice: boolean;
-  showBarcodeText: boolean;
-  fontSize?: number;
-}
-
-/** The three fixed layout presets keyed by the seeded template names. */
-export const LAYOUT_PRESETS: Record<string, LabelToggles> = {
-  Retail: {
-    showProductTitle: true,
-    showVariantTitle: true,
-    showSku: true,
-    showPrice: false,
-    showBarcodeText: true,
-    fontSize: 10,
-  },
-  Shelf: {
-    showProductTitle: true,
-    showVariantTitle: true,
-    showSku: true,
-    showPrice: true,
-    showBarcodeText: true,
-    fontSize: 10,
-  },
-  Price: {
-    showProductTitle: true,
-    showVariantTitle: false,
-    showSku: false,
-    showPrice: true,
-    showBarcodeText: true,
-    fontSize: 10,
-  },
-  Small: {
-    showProductTitle: false,
-    showVariantTitle: true,
-    showSku: false,
-    showPrice: false,
-    showBarcodeText: true,
-    fontSize: 8,
-  },
-  Dymo: {
-    showProductTitle: false,
-    showVariantTitle: false,
-    showSku: true,
-    showPrice: true,
-    showBarcodeText: true,
-    fontSize: 8,
-  },
-};
+export { LAYOUT_PRESETS } from "./presets";
+export type { LabelToggles } from "./presets";
 
 export interface LabelSizeSpec {
   widthMm: number;
   heightMm: number;
-  unit?: "mm" | "in"; // rendering unit for CSS (default mm)
+  unit?: "mm" | "in";
 }
 
 export interface BarcodeRulesSpec {
@@ -96,13 +38,7 @@ export interface LabelData {
   variantTitle: string | null;
   sku: string | null;
   price: string | null;
-  /** Raw values (always populated) so render-time toggles can re-enable fields. */
-  raw: {
-    title: string | null;
-    variantTitle: string | null;
-    sku: string | null;
-    price: string | null;
-  };
+  raw: { title: string | null; variantTitle: string | null; sku: string | null; price: string | null };
   barcode: string;
   barcodeType: BarcodeType;
 }
@@ -111,38 +47,15 @@ export type LabelRenderResult =
   | { kind: "rendered"; html: string }
   | { kind: "skipped"; gid: string; reason: string };
 
-function cssLength(mm: number, unit: "mm" | "in"): string {
-  return unit === "in"
-    ? `${(mm / MM_PER_INCH).toFixed(3)}in`
-    : `${mm.toFixed(2)}mm`;
-}
-
-/** Builds the data a label needs. Omits "Default Title" variant titles. */
 export function buildLabelData(
   variant: VariantLabelInput,
   toggles: LabelToggles,
   barcodeRules: BarcodeRulesSpec,
 ): { kind: "ok"; data: LabelData } | { kind: "skipped"; gid: string; reason: string } {
-  if (!variant.barcode) {
-    return { kind: "skipped", gid: variant.gid, reason: "no barcode" };
-  }
-  const issues = validateValue(variant.barcode, {
-    type: barcodeRules.type,
-    length: barcodeRules.length,
-  });
-  if (issues.length > 0) {
-    return {
-      kind: "skipped",
-      gid: variant.gid,
-      reason: `invalid barcode (${issues.join("; ")})`,
-    };
-  }
-
-  const variantTitle =
-    variant.variantTitle && variant.variantTitle !== "Default Title"
-      ? variant.variantTitle
-      : null;
-
+  if (!variant.barcode) return { kind: "skipped", gid: variant.gid, reason: "no barcode" };
+  const issues = validateValue(variant.barcode, barcodeRules);
+  if (issues.length) return { kind: "skipped", gid: variant.gid, reason: `invalid barcode (${issues.join("; ")})` };
+  const variantTitle = variant.variantTitle && variant.variantTitle !== "Default Title" ? variant.variantTitle : null;
   return {
     kind: "ok",
     data: {
@@ -150,111 +63,101 @@ export function buildLabelData(
       variantTitle: toggles.showVariantTitle ? variantTitle : null,
       sku: toggles.showSku ? variant.sku : null,
       price: toggles.showPrice ? variant.price : null,
-      raw: {
-        title: variant.productTitle ?? null,
-        variantTitle,
-        sku: variant.sku ?? null,
-        price: variant.price ?? null,
-      },
+      raw: { title: variant.productTitle, variantTitle, sku: variant.sku, price: variant.price },
       barcode: variant.barcode,
       barcodeType: barcodeRules.type,
     },
   };
 }
 
-function barcodeSvg(value: string, bcid: string): string {
-  try {
-    const svg = bwipjs.toSVG({ bcid, text: value, includetext: false, scale: 2, height: 8 });
-    return svg.replace(
-      /<svg /,
-      '<svg style="width:100%;height:auto;display:block" preserveAspectRatio="none" ',
-    );
-  } catch {
-    return "";
-  }
+export { escapeHtml };
+
+function printText(primitive: Extract<LabelPrimitive, { kind: "text" }>): string {
+  const top = primitive.baselineMm - ptToMm(primitive.fontSizePt) * 0.82;
+  const height = ptToMm(primitive.fontSizePt) * 1.35;
+  return `<span class="label-text" style="left:${primitive.xMm.toFixed(4)}mm;top:${top.toFixed(4)}mm;width:${primitive.maxWidthMm.toFixed(4)}mm;height:${height.toFixed(4)}mm;font-size:${primitive.fontSizePt.toFixed(2)}pt;text-align:${primitive.align};">${escapeHtml(primitive.text)}</span>`;
 }
 
-const TRUNCATION_STYLE =
-  "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;word-break:break-word;";
+function printPage(page: LayoutPage, sheetMode: LayoutDocument["sheetMode"], isLast: boolean): string {
+  const text = page.primitives
+    .filter((primitive): primitive is Extract<LabelPrimitive, { kind: "text" }> => primitive.kind === "text")
+    .map(printText)
+    .join("");
+  const bars = page.primitives.filter((primitive): primitive is Extract<LabelPrimitive, { kind: "rect" }> => primitive.kind === "rect");
+  const bounds = bars.reduce((result, bar) => ({
+    minX: Math.min(result.minX, bar.xMm),
+    minY: Math.min(result.minY, bar.yMm),
+    maxX: Math.max(result.maxX, bar.xMm + bar.widthMm),
+    maxY: Math.max(result.maxY, bar.yMm + bar.heightMm),
+  }), { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+  const { minX, minY, maxX, maxY } = bounds;
+  const barcodeWidth = maxX - minX;
+  const barcodeHeight = maxY - minY;
+  const rects = bars
+    .map((bar) => `<rect x="${(bar.xMm - minX).toFixed(4)}" y="${(bar.yMm - minY).toFixed(4)}" width="${bar.widthMm.toFixed(4)}" height="${bar.heightMm.toFixed(4)}" fill="#000000" shape-rendering="crispEdges"/>`)
+    .join("");
+  const svg = bars.length
+    ? `<div class="label-barcode" style="left:${minX.toFixed(4)}mm;top:${minY.toFixed(4)}mm;width:${barcodeWidth.toFixed(4)}mm;height:${barcodeHeight.toFixed(4)}mm;flex:1 1 auto"><svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 ${barcodeWidth.toFixed(4)} ${barcodeHeight.toFixed(4)}" preserveAspectRatio="xMidYMid meet" shape-rendering="crispEdges">${rects}</svg></div>`
+    : "";
+  const pageClass = sheetMode === "roll" ? "label" : "sheet";
+  const lastClass = isLast ? ` ${pageClass}-last` : "";
+  return `<section class="${pageClass}${lastClass}" style="width:${page.widthMm.toFixed(2)}mm;height:${page.heightMm.toFixed(2)}mm">${svg}${text}</section>`;
+}
 
-/**
- * Renders one label as a self-contained HTML snippet sized exactly to the
- * label size. White background, black bars/text — the print area is
- * intentionally never theme-aware.
- */
+/** Print-only HTML: inline vector bars and an explicit physical page size. */
+export function renderPrintLayoutHtml(layout: LayoutDocument, hint = false): string {
+  const widthMm = layout.pages[0]?.widthMm ?? 50;
+  const heightMm = layout.pages[0]?.heightMm ?? 25;
+  const pageSize = layout.sheetMode === "grid" ? "A4 portrait" : `${widthMm.toFixed(2)}mm ${heightMm.toFixed(2)}mm`;
+  const documentWidth = layout.sheetMode === "grid" ? "210mm" : `${widthMm.toFixed(2)}mm`;
+  const documentHeight = layout.sheetMode === "grid" ? "297mm" : `${heightMm.toFixed(2)}mm`;
+  const hints = hint
+    ? `<div class="print-hint">Set margins to None and scale to 100%.</div>${layout.warnings.map((warning) => `<div class="print-hint">${escapeHtml(warning)}</div>`).join("")}`
+    : "";
+  const pages = layout.pages.map((page, index) => printPage(page, layout.sheetMode, index === layout.pages.length - 1)).join("");
+  return `<style>
+@page { size: ${pageSize}; margin: 0; }
+html, body { margin: 0 !important; padding: 0 !important; width: ${documentWidth}; height: ${documentHeight}; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.label, .sheet { position: relative; display: flex; flex-direction: column; flex: none; box-sizing: border-box; overflow: hidden; margin: 0; padding: 0; background: #ffffff; -webkit-print-color-adjust: exact; print-color-adjust: exact; break-after: page; page-break-after: always; }
+.label-last { break-after: auto; page-break-after: auto; }
+.sheet-last { break-after: auto; page-break-after: auto; }
+.label-barcode { position: absolute; display: block; fill: #000000; shape-rendering: crispEdges; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.label-barcode svg { display: block; width: 100%; height: 100%; fill: #000000; shape-rendering: crispEdges; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.label-text { position: absolute; display: block; box-sizing: border-box; overflow: hidden; white-space: nowrap; line-height: 1.35; color: #000000; font-family: Helvetica, Arial, sans-serif; }
+.print-hint { padding: 8px 12px; font: 12px/1.4 sans-serif; color: #222; background: #fff3cd; }
+@media print { .print-hint { display: none; } }
+</style>${hints}${pages}`;
+}
+
 export function renderLabelSvgOrHtml(
-  labelData: LabelData,
+  data: LabelData,
   size: LabelSizeSpec,
   toggles: LabelToggles = LAYOUT_PRESETS.Retail,
 ): LabelRenderResult {
-  const unit = size.unit ?? "mm";
-  const fontSize = toggles.fontSize ?? 10;
-  const lines: string[] = [];
-
-  // Render-time toggles are authoritative: a field is shown when its toggle
-  // is on, falling back to the raw value when the builder's toggles had
-  // stripped it (so rendering with different toggles than the build works).
-  const title = toggles.showProductTitle
-    ? (labelData.title ?? labelData.raw.title)
-    : null;
-  const variantTitle = toggles.showVariantTitle
-    ? (labelData.variantTitle ?? labelData.raw.variantTitle)
-    : null;
-  const sku = toggles.showSku ? (labelData.sku ?? labelData.raw.sku) : null;
-  const price = toggles.showPrice ? (labelData.price ?? labelData.raw.price) : null;
-
-  if (title) {
-    lines.push(
-      `<div style="font-size:${fontSize}pt;font-weight:600;${TRUNCATION_STYLE}">${escapeHtml(title)}</div>`,
-    );
+  // Legacy callers may request inch CSS output; the shared geometry remains
+  // millimeter-based, so a 25.4 mm size still represents one physical inch.
+  const scale = 1;
+  try {
+    const layout = layoutJob({
+      lines: [{
+        variantGid: "preview",
+        productGid: "preview-product",
+        productName: toggles.showProductTitle ? data.title ?? data.raw.title : null,
+        variantTitle: toggles.showVariantTitle ? data.variantTitle ?? data.raw.variantTitle : null,
+        sku: toggles.showSku ? data.sku ?? data.raw.sku : null,
+        barcode: data.barcode,
+        price: toggles.showPrice ? formatPrice(data.price ?? data.raw.price) : null,
+        quantity: 1,
+      }],
+      templateSnap: { barcodeType: data.barcodeType, toggles },
+      sizeSnap: { widthMm: size.widthMm * scale, heightMm: size.heightMm * scale, sheetMode: "roll" },
+    });
+    return { kind: "rendered", html: renderLayoutHtml(layout, { preview: true }) };
+  } catch (error) {
+    return { kind: "skipped", gid: data.barcode, reason: error instanceof Error ? error.message : "label rendering failed" };
   }
-  if (variantTitle) {
-    lines.push(
-      `<div style="font-size:${fontSize * 0.9}pt;${TRUNCATION_STYLE}">${escapeHtml(variantTitle)}</div>`,
-    );
-  }
-  if (sku || price) {
-    const parts: string[] = [];
-    if (sku) parts.push(`SKU: ${escapeHtml(sku)}`);
-    if (price) parts.push(`${escapeHtml(price)}`);
-    lines.push(
-      `<div style="font-size:${fontSize * 0.85}pt;${TRUNCATION_STYLE}">${parts.join(" · ")}</div>`,
-    );
-  }
-
-  const barcodeHtml = barcodeSvg(labelData.barcode, labelData.barcodeType);
-  if (!barcodeHtml) {
-    return {
-      kind: "skipped",
-      gid: labelData.barcode,
-      reason: "barcode could not be rendered",
-    };
-  }
-
-  const barcodeText = toggles.showBarcodeText
-    ? `<div style="font-size:${Math.max(6, fontSize * 0.8)}pt;font-family:monospace;text-align:center;">${escapeHtml(labelData.barcode)}</div>`
-    : "";
-
-  const html =
-    `<div style="box-sizing:border-box;width:${cssLength(size.widthMm, unit)};height:${cssLength(size.heightMm, unit)};` +
-    `background:#ffffff;color:#000000;padding:2mm;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;">` +
-    `<div style="min-height:0;overflow:hidden;">${lines.join("")}</div>` +
-    `<div style="flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center;">${barcodeHtml}</div>` +
-    barcodeText +
-    `</div>`;
-
-  return { kind: "rendered", html };
 }
 
-export function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-/** Convenience: validate + build + render in one call. */
 export function renderVariantLabel(
   variant: VariantLabelInput,
   size: LabelSizeSpec,
@@ -263,9 +166,6 @@ export function renderVariantLabel(
 ): LabelRenderResult {
   const built = buildLabelData(variant, toggles, barcodeRules);
   if (built.kind === "skipped") return built;
-  const rendered = renderLabelSvgOrHtml(built.data, size, toggles);
-  if (rendered.kind === "skipped") {
-    return { kind: "skipped", gid: variant.gid, reason: rendered.reason };
-  }
-  return rendered;
+  const result = renderLabelSvgOrHtml(built.data, size, toggles);
+  return result.kind === "rendered" ? result : { ...result, gid: variant.gid };
 }
