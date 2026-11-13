@@ -195,7 +195,8 @@ export default function GeneratorPage() {
   // and show the error inside the modal.
   useEffect(() => {
     if (!editing || fetcher.state !== "idle" || !fetcher.data) return;
-    if (fetcher.formData?.get("intent") !== "set") return;
+    if ((fetcher.formData as FormData | null | undefined)?.get("intent") !== "set")
+      return;
     if (fetcher.data.ok) {
       hideModal(EDIT_MODAL_ID);
       setEditing(null);
@@ -304,15 +305,18 @@ export default function GeneratorPage() {
           <s-button
             variant="primary"
             onClick={() => submitGenerate(loaderData.matchingMissingGids.filter((gid) => selected.has(gid)))}
-            title={
+            accessibilityLabel={
               selectedMissing.length === 0
                 ? "Select variants without a barcode"
-                : `Generate for ${selectedMissing.length} variant(s)`
+                : `Generate barcodes for ${selectedMissing.length} variants`
             }
             {...(busy || selectedMissing.length === 0 ? { disabled: true } : {})}
           >
             Generate barcodes{selectedMissing.length > 0 ? ` (${selectedMissing.length})` : ""}
           </s-button>
+          {selectedMissing.length === 0 && (
+            <s-text color="subdued">Select variants without a barcode to enable.</s-text>
+          )}
           <s-button variant="secondary" onClick={submitValidate} {...(busy ? { disabled: true } : {})}>
             Validate all
           </s-button>
@@ -582,7 +586,7 @@ export default function GeneratorPage() {
         {preview && (
           <>
             <s-paragraph>
-              <s-text tone="subdued">{preview.title}</s-text>
+              <s-text color="subdued">{preview.title}</s-text>
             </s-paragraph>
             {preview.svg ? (
               <div
@@ -630,7 +634,7 @@ export default function GeneratorPage() {
               />
             </label>
             <s-paragraph>
-              <s-text tone="subdued">
+              <s-text color="subdued">
                 Type: {loaderData.barcodeType} · required length: {loaderData.barcodeLength}{" "}
                 characters. Values already used by another variant (any status) are rejected.
               </s-text>

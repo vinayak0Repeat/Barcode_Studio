@@ -109,7 +109,7 @@ export default function DuplicatesPage() {
       >
         {loaderData.groups.length === 0 && (
           <s-paragraph>
-            <s-text tone="subdued">
+            <s-text color="subdued">
               All good — every active variant has a unique barcode. Duplicates
               are only computed over active products; archived variants can
               still block value reuse.

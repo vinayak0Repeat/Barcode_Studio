@@ -138,7 +138,7 @@ export default function Index() {
             {loaderData.coverage.invalid} invalid
           </s-paragraph>
           <s-paragraph>
-            <s-text tone="subdued">
+            <s-text color="subdued">
               Coverage counts variants of active products only; draft/archived
               variants are excluded (their barcodes still block reuse).
             </s-text>
@@ -213,7 +213,7 @@ export default function Index() {
       <s-section heading="Recent activity">
         {loaderData.recentActivity.length === 0 ? (
           <s-paragraph>
-            <s-text tone="subdued">
+            <s-text color="subdued">
               No barcode activity yet — generate barcodes from the Generator.
             </s-text>
           </s-paragraph>
