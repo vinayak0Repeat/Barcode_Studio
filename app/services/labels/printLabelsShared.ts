@@ -140,3 +140,127 @@ export function groupVariantsByProduct<T extends { productGid: string }>(
   }
   return groups;
 }
+
+// ---------------------------------------------------------------------------
+// Instant Generate-button state (perf pass, item I)
+// ---------------------------------------------------------------------------
+
+export interface GenerateButtonState {
+  /** True when the button must be disabled. */
+  disabled: boolean;
+  /** Suffix for the label: " (N)", " (N…)" while pending, "" when zero. */
+  labelSuffix: string;
+}
+
+/**
+ * Derives the Generate-button state SYNCHRONOUSLY from data already in
+ * memory. While parent ticks are still loading their variants
+ * (pendingCount > 0) the true missing-count is unknown: show an honest "…"
+ * and keep the button disabled so it can never appear enabled when the
+ * confirmation modal would count 0 (and vice versa).
+ */
+export function generateButtonState(
+  missingCount: number,
+  pendingCount: number,
+): GenerateButtonState {
+  if (pendingCount > 0) {
+    return {
+      disabled: true,
+      labelSuffix: missingCount > 0 ? ` (${missingCount}…)` : " (…)",
+    };
+  }
+  return {
+    disabled: missingCount === 0,
+    labelSuffix: missingCount > 0 ? ` (${missingCount})` : "",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Controlled parent checkbox + two-way selection (bug fix)
+// ---------------------------------------------------------------------------
+
+export interface ParentCheckboxState {
+  checked: boolean;
+  indeterminate: boolean;
+}
+
+/**
+ * Derives a product's parent-checkbox state from the selection.
+ * - loaded (selectable gids known): checked when EVERY selectable variant is
+ *   selected, indeterminate when only some are.
+ * - not loaded: honest fallback — checked=false, indeterminate when any of
+ *   the product's variants is selected (known via the gid->product map).
+ */
+export function parentCheckboxState(args: {
+  selected: ReadonlyMap<string, number>;
+  productGid: string;
+  /** Selectable (barcoded) variant gids when the product's variants are loaded. */
+  selectableGids: readonly string[] | null;
+  productBySelectedGid: ReadonlyMap<string, string>;
+}): ParentCheckboxState {
+  const { selected, productGid, selectableGids, productBySelectedGid } = args;
+  if (selectableGids && selectableGids.length > 0) {
+    let selectedCount = 0;
+    for (const gid of selectableGids) {
+      if (selected.has(gid)) selectedCount += 1;
+    }
+    return {
+      checked: selectedCount === selectableGids.length,
+      indeterminate: selectedCount > 0 && selectedCount < selectableGids.length,
+    };
+  }
+  if (selectableGids && selectableGids.length === 0) {
+    return { checked: false, indeterminate: false }; // nothing selectable
+  }
+  let anySelected = false;
+  for (const [gid, product] of productBySelectedGid) {
+    if (product === productGid && selected.has(gid)) {
+      anySelected = true;
+      break;
+    }
+  }
+  return { checked: false, indeterminate: anySelected };
+}
+
+export interface UntickProductResult {
+  /** New selection WITHOUT the product's variants; other products and their quantities preserved. */
+  selection: Map<string, number>;
+  /** The gids that were removed (for cleaning side maps). */
+  removedGids: string[];
+}
+
+/**
+ * Removes exactly one product's selected variants WITHOUT any network wait,
+ * using the gid->product mapping (works even when the product's variants
+ * were never loaded into the cache).
+ */
+export function untickProductSelection(
+  selected: ReadonlyMap<string, number>,
+  productGid: string,
+  productBySelectedGid: ReadonlyMap<string, string>,
+): UntickProductResult {
+  const selection = new Map(selected);
+  const removedGids: string[] = [];
+  for (const [gid, product] of productBySelectedGid) {
+    if (product === productGid && selection.has(gid)) {
+      selection.delete(gid);
+      removedGids.push(gid);
+    }
+  }
+  return { selection, removedGids };
+}
+
+/** Clamps a preview index into the selection range (empty -> 0). */
+export function clampPreviewIndex(index: number, selectedCount: number): number {
+  if (selectedCount <= 0) return 0;
+  return Math.max(0, Math.min(index, selectedCount - 1));
+}
+
+/**
+ * Late-load guard for the optimistic parent tick: the tick's result applies
+ * only if the product's token is unchanged since it was issued (an untick
+ * or re-tick in between bumps the token and the stale result is ignored).
+ */
+export function shouldApplyLateTick(issuedToken: number, currentToken: number): boolean {
+  return issuedToken === currentToken;
+}

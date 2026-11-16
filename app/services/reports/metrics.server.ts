@@ -45,43 +45,48 @@ export function computeCoverage(raw: RawCounts): CoverageMetrics {
 }
 
 export async function gatherCoverage(shopId: string): Promise<CoverageMetrics> {
-  // One grouped SQL statement: barcode presence + duplicates over ACTIVE
-  // variants only.
-  const [grouped] = await prisma.$queryRaw<
-    Array<{
-      total: bigint;
-      withbarcode: bigint;
-      missing: bigint;
-      dupgroups: bigint;
-      dupvariants: bigint;
-    }>
-  >`
-    SELECT
-      COUNT(*) AS total,
-      COUNT(*) FILTER (WHERE "barcode" IS NOT NULL) AS withbarcode,
-      COUNT(*) FILTER (WHERE "barcode" IS NULL) AS missing,
-      COUNT(*) FILTER (
-        WHERE "barcode" IN (
+  // Perf pass: the three reads are INDEPENDENT (grouped aggregate, config,
+  // the barcodes scanned for validation) — they previously ran one after
+  // another (3 sequential round trips to a remote DB) and now run in
+  // parallel. Numbers are unchanged.
+  const [groupedRows, config, barcodes] = await Promise.all([
+    prisma.$queryRaw<
+      Array<{
+        total: bigint;
+        withbarcode: bigint;
+        missing: bigint;
+        dupgroups: bigint;
+        dupvariants: bigint;
+      }>
+    >`
+      SELECT
+        COUNT(*) AS total,
+        COUNT(*) FILTER (WHERE "barcode" IS NOT NULL) AS withbarcode,
+        COUNT(*) FILTER (WHERE "barcode" IS NULL) AS missing,
+        COUNT(*) FILTER (
+          WHERE "barcode" IN (
+            SELECT "barcode" FROM "CachedVariant"
+            WHERE "shopId" = ${shopId} AND "barcode" IS NOT NULL AND "status" = 'ACTIVE'
+            GROUP BY "barcode" HAVING COUNT(*) > 1
+          )
+        ) AS dupvariants,
+        (SELECT COUNT(*) FROM (
           SELECT "barcode" FROM "CachedVariant"
           WHERE "shopId" = ${shopId} AND "barcode" IS NOT NULL AND "status" = 'ACTIVE'
           GROUP BY "barcode" HAVING COUNT(*) > 1
-        )
-      ) AS dupvariants,
-      (SELECT COUNT(*) FROM (
-        SELECT "barcode" FROM "CachedVariant"
-        WHERE "shopId" = ${shopId} AND "barcode" IS NOT NULL AND "status" = 'ACTIVE'
-        GROUP BY "barcode" HAVING COUNT(*) > 1
-      ) d) AS dupgroups
-    FROM "CachedVariant"
-    WHERE "shopId" = ${shopId} AND "status" = 'ACTIVE'
-  `;
+        ) d) AS dupgroups
+      FROM "CachedVariant"
+      WHERE "shopId" = ${shopId} AND "status" = 'ACTIVE'
+    `,
+    getBarcodeConfig(shopId),
+    prisma.cachedVariant.findMany({
+      where: { shopId, status: "ACTIVE", barcode: { not: null } },
+      select: { barcode: true },
+    }),
+  ]);
+  const grouped = groupedRows[0];
 
   // Invalid barcodes: validate cached values against the shop's rules.
-  const config = await getBarcodeConfig(shopId);
-  const barcodes = await prisma.cachedVariant.findMany({
-    where: { shopId, status: "ACTIVE", barcode: { not: null } },
-    select: { barcode: true },
-  });
   const invalid = barcodes.filter((v) => validateValue(v.barcode!, config).length > 0).length;
 
   return computeCoverage({

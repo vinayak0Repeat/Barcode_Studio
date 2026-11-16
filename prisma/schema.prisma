@@ -148,6 +148,7 @@ model PrintJob {
   labelTemplateId String?
 
   @@index([shopId, printedAt])
+  @@index([shopId, templateId])
 }
 
 model PrintJobLine {
@@ -221,6 +222,7 @@ model CachedVariant {
 
   @@unique([shopId, gid])
   @@index([shopId, productGid])
+  @@index([shopId, status])
   // Deliberately NOT unique: Shopify allows duplicate barcodes/SKUs;
   // the app enforces uniqueness in code.
   @@index([shopId, barcode])

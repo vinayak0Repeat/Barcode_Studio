@@ -29,6 +29,9 @@ import {
 import {
   countMissingSelected,
   createStaleGuard,
+  generateButtonState,
+  parentCheckboxState,
+  untickProductSelection,
   groupVariantsByProduct,
   variantCacheKey,
 } from "../services/labels/printLabelsShared";
@@ -441,6 +444,43 @@ interface PolarisActiveModalElement extends HTMLElement {
   hideOverlay: () => void;
 }
 const GENERATE_MODAL_ID = "print-labels-generate-modal";
+
+/**
+ * Controlled parent checkbox. `indeterminate` is a DOM PROPERTY (not an
+ * attribute), so it is set through a ref in an effect — React cannot pass it
+ * as a prop.
+ */
+function ParentCheckbox(props: {
+  checked: boolean;
+  indeterminate: boolean;
+  disabled: boolean;
+  label: string;
+  pending: boolean;
+  onChange: () => void;
+  onPrefetch: () => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = props.indeterminate;
+  }, [props.indeterminate, props.checked]);
+  return (
+    <>
+      <input
+        ref={ref}
+        type="checkbox"
+        aria-label={props.label}
+        checked={props.checked}
+        disabled={props.disabled}
+        onMouseEnter={props.onPrefetch}
+        onFocus={props.onPrefetch}
+        onChange={props.onChange}
+      />
+      {props.pending && (
+        <span className="bs-muted" aria-label="Loading variants">…</span>
+      )}
+    </>
+  );
+}
 function showModal(id: string) {
   (document.getElementById(id) as PolarisActiveModalElement | null)?.showOverlay();
 }
@@ -486,8 +526,18 @@ export default function PrintLabelsPage() {
 
   // ----- selection (keyed by gid, lives outside the list data) -----
   const [selected, setSelected] = useState<Map<string, number>>(() => new Map(loaderData.restore?.selection.map(({ gid, quantity }) => [gid, quantity]) ?? []));
+  /** variant gid -> product gid for every SELECTED variant, so a parent
+   * untick can remove exactly that product's variants without a fetch. */
+  const [productBySelectedGid, setProductBySelectedGid] = useState<Map<string, string>>(
+    () => new Map(loaderData.restore?.variants.filter((row) => loaderData.restore?.selection.some((line) => line.gid === row.gid)).map((row) => [row.gid, row.productGid]) ?? []),
+  );
+  /** Per-product monotonic token: a parent UNTICK bumps it so a still-in-flight
+   * optimistic load for that product cannot tick variants afterwards. */
+  const parentLoadTokens = useRef<Map<string, number>>(new Map());
   const quantityTouchedGids = useRef(new Set(loaderData.restore?.selection.map(({ gid }) => gid) ?? []));
   const [barcodeByGid, setBarcodeByGid] = useState<Map<string, string | null>>(() => new Map(loaderData.restore?.variants.map((row) => [row.gid, row.barcode]) ?? []));
+  /** Perf pass: parent rows whose variants are loading for an optimistic tick. */
+  const [pendingProducts, setPendingProducts] = useState<Set<string>>(() => new Set());
   const [restoreNotice, setRestoreNotice] = useState<string | null>(() => loaderData.restore?.missing.length ? `Could not restore: ${loaderData.restore.missing.join("; ")}` : null);
 
   // ----- banners / result -----
@@ -524,6 +574,13 @@ export default function PrintLabelsPage() {
   const [highlightedPreviewGid, setHighlightedPreviewGid] = useState<string | null>(null);
 
   const selectedGids = useMemo(() => [...selected.keys()], [selected]);
+  // Bug fix (req 4): whenever the selection size changes (notably SHRINKS),
+  // reset the preview pagination into the new range; an empty selection
+  // shows the empty state (driven by selected.size elsewhere) and the bar
+  // disappears.
+  useEffect(() => {
+    setPreviewPageCount(60);
+  }, [selected.size]);
   const previewSize = loaderData.sizes.find((size) => size.id === sizeId);
   const previewTemplate = loaderData.templates.find((template) => template.id === templateId);
   const variantByGid = new Map(Object.values(variantCache).flat().map((variant) => [variant.gid, variant]));
@@ -541,6 +598,11 @@ export default function PrintLabelsPage() {
   }));
   const totalLabels = countPrintableLabels(previewSelections, [...variantByGid.values()], new Set(Object.keys(invalidReasons)));
   const missingSelectedCount = useMemo(() => countMissingSelected(selectedGids, barcodeByGid), [selectedGids, barcodeByGid]);
+  // Instant Generate-button state: while a parent tick's variants are still
+  // loading, the true missing-count is unknown — show an honest "…" and keep
+  // the button disabled so it can never claim a count the modal would not
+  // confirm (rule from Step 3/P1: only selected variants WITHOUT a barcode).
+  const generateState = generateButtonState(missingSelectedCount, pendingProducts.size);
   const missingSelectedNoteCount = selectedGids.filter((gid) => barcodeByGid.has(gid) && !barcodeByGid.get(gid)).length;
   const previewRows = [...variantByGid.values()].map((variant) => ({ ...variant, productTitle: productByGid.get(variant.productGid)?.title ?? null }));
   const previewEntries = buildPreviewEntries(previewSelections, previewRows, new Set(Object.keys(invalidReasons)));
@@ -792,6 +854,17 @@ export default function PrintLabelsPage() {
       return next;
     });
     if (capped.size) setCappedQuantityGids((prev) => new Set([...prev, ...capped]));
+    setProductBySelectedGid((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const variant of variants) {
+        if (!next.has(variant.gid)) {
+          next.set(variant.gid, variant.productGid);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
     setBarcodeByGid((prev) => {
       const next = new Map(prev);
       for (const variant of variants) next.set(variant.gid, variant.barcode);
@@ -799,15 +872,47 @@ export default function PrintLabelsPage() {
     });
   };
 
+  /** Removes gids from the selection + every side map (products, touched, capped). */
+  const removeSelectedGids = (gids: string[]) => {
+    if (gids.length === 0) return;
+    setSelected((prev) => {
+      const next = new Map(prev);
+      for (const gid of gids) next.delete(gid);
+      return next;
+    });
+    setProductBySelectedGid((prev) => {
+      const next = new Map(prev);
+      for (const gid of gids) next.delete(gid);
+      return next;
+    });
+    for (const gid of gids) quantityTouchedGids.current.delete(gid);
+    setCappedQuantityGids((prev) => {
+      const next = new Set(prev);
+      for (const gid of gids) next.delete(gid);
+      return next;
+    });
+  };
+
   const toggleVariant = (gid: string, qty?: number) => {
     const variant = Object.values(variantCache).flat().find((item) => item.gid === gid);
     const initial = variant ? quantityFor(variant) : { quantity: qty ?? 1, capped: false, zeroStock: false };
+    if (selected.has(gid)) {
+      removeSelectedGids([gid]);
+      return;
+    }
     setSelected((prev) => {
       const next = new Map(prev);
-      if (next.has(gid)) { next.delete(gid); quantityTouchedGids.current.delete(gid); }
-      else { next.set(gid, initial.quantity); quantityTouchedGids.current.delete(gid); }
+      next.set(gid, initial.quantity);
+      quantityTouchedGids.current.delete(gid);
       return next;
     });
+    if (variant) {
+      setProductBySelectedGid((prev) => {
+        const next = new Map(prev);
+        next.set(gid, variant.productGid);
+        return next;
+      });
+    }
     if (initial.capped) setCappedQuantityGids((prev) => new Set([...prev, gid]));
     else setCappedQuantityGids((prev) => { const next = new Set(prev); next.delete(gid); return next; });
   };
@@ -839,15 +944,66 @@ export default function PrintLabelsPage() {
     barcodeFetcher.submit(form, { method: "post" });
   };
 
-  const parentCheckbox = async (product: PrintLabelProduct) => {
+  /**
+   * Perf pass (optimistic tick) + bug fix (two-way toggle):
+   * - checked/indeterminate -> UNSELECTS every selected variant of the
+   *   product in the same frame, with NO network wait (the gid->product map
+   *   knows them even when the variant cache was never loaded), and bumps
+   *   the per-product token so a still-in-flight optimistic load for this
+   *   product cannot tick anything afterwards.
+   * - unchecked -> optimistic select (pending indicator, background load).
+   */
+  const parentCheckbox = (product: PrintLabelProduct) => {
     const key = cacheKeyFor(product.gid);
     const cached = variantCache[key];
+    const selectableGids = cached
+      ? cached.filter((variant) => variant.barcode).map((variant) => variant.gid)
+      : null;
+    const state = parentCheckboxState({
+      selected,
+      productGid: product.gid,
+      selectableGids,
+      productBySelectedGid,
+    });
+
+    if (state.checked || state.indeterminate) {
+      // UNTICK: remove exactly this product's selected variants now.
+      const token = (parentLoadTokens.current.get(product.gid) ?? 0) + 1;
+      parentLoadTokens.current.set(product.gid, token);
+      const { removedGids } = untickProductSelection(
+        selected,
+        product.gid,
+        productBySelectedGid,
+      );
+      removeSelectedGids(removedGids);
+      return;
+    }
+
     if (cached) {
+      const token = (parentLoadTokens.current.get(product.gid) ?? 0) + 1;
+      parentLoadTokens.current.set(product.gid, token);
       tickVariants(cached);
       return;
     }
-    const variants = await ensureVariantsLoaded([product.gid]);
-    if (variants) tickVariants(variants.filter((v) => v.productGid === product.gid));
+    const token = (parentLoadTokens.current.get(product.gid) ?? 0) + 1;
+    parentLoadTokens.current.set(product.gid, token);
+    setPendingProducts((prev) => new Set(prev).add(product.gid));
+    void ensureVariantsLoaded([product.gid])
+      .then((variants) => {
+        // Late-load guard: if the product was unticked (or re-ticked) while
+        // loading, this result is stale for that gesture — ignore it.
+        if (parentLoadTokens.current.get(product.gid) !== token) return;
+        if (variants) {
+          tickVariants(variants.filter((v) => v.productGid === product.gid));
+        }
+      })
+      .finally(() => {
+        setPendingProducts((prev) => {
+          const next = new Set(prev);
+          next.delete(product.gid);
+          return next;
+        });
+      });
   };
 
   /** P1 item 5: ONE bulk call for every loaded product. */
@@ -1044,9 +1200,9 @@ export default function PrintLabelsPage() {
             variant="primary"
             onClick={() => showModal(GENERATE_MODAL_ID)}
             accessibilityLabel="Generate barcodes for the selected variants without one"
-            {...(busy || missingSelectedCount === 0 ? { disabled: true } : {})}
+            {...(busy || generateState.disabled ? { disabled: true } : {})}
           >
-            Generate Barcode{missingSelectedCount > 0 ? ` (${missingSelectedCount})` : ""}
+            Generate Barcode{generateState.labelSuffix}
           </s-button>
           <span className="bs-disabled-tooltip" title="Coming soon (Step 5)"><s-button variant="tertiary" disabled accessibilityLabel="Generate SKU — coming soon in Step 5">Generate SKU</s-button></span>
           <s-button variant="tertiary" onClick={() => void selectAllProducts()} {...(loadingMore || selectingAll || busy ? { disabled: true } : {})}>Select All Products</s-button>
@@ -1078,10 +1234,27 @@ export default function PrintLabelsPage() {
           const hasInvalid = productVariants.some((variant) => variant.barcode && validateValue(variant.barcode, { type: previewType, length: loaderData.barcodeLength }).length > 0);
           const hasDuplicate = productVariants.some((variant) => variant.barcodeStatus === "duplicate");
           const productStatus = hasInvalid ? "Invalid" : hasDuplicate ? "Duplicate" : product.withBarcode < product.variantCount ? "Missing" : "Ready";
+          const productCachedVariants = variantCache[cacheKeyFor(product.gid)];
+          const parentState = parentCheckboxState({
+            selected,
+            productGid: product.gid,
+            selectableGids: productCachedVariants
+              ? productCachedVariants.filter((variant) => variant.barcode).map((variant) => variant.gid)
+              : null,
+            productBySelectedGid,
+          });
           return <Fragment key={product.gid}>
           <div className="bs-product-card" id={`product-${product.gid}`}>
-            <input type="checkbox" aria-label={`Select all variants of ${product.title ?? "product"}`} disabled={loadingVariantsFor.has(cacheKeyFor(product.gid))} onChange={() => void parentCheckbox(product)} />
-            <button className="bs-product-expand" type="button" aria-label={`${expanded.has(product.gid) ? "Collapse" : "Expand"} ${product.title ?? "product"}`} onClick={() => expandProduct(product.gid)}>{expanded.has(product.gid) ? "▾" : "▸"}</button>
+            <ParentCheckbox
+              label={`Select all variants of ${product.title ?? "product"}`}
+              checked={parentState.checked}
+              indeterminate={parentState.indeterminate}
+              disabled={product.withBarcode === 0 || loadingVariantsFor.has(cacheKeyFor(product.gid)) || pendingProducts.has(product.gid)}
+              pending={pendingProducts.has(product.gid)}
+              onChange={() => parentCheckbox(product)}
+              onPrefetch={() => void ensureVariantsLoaded([product.gid])}
+            />
+            <button className="bs-product-expand" type="button" aria-label={`${expanded.has(product.gid) ? "Collapse" : "Expand"} ${product.title ?? "product"}`} onMouseEnter={() => void ensureVariantsLoaded([product.gid])} onFocus={() => void ensureVariantsLoaded([product.gid])} onClick={() => expandProduct(product.gid)}>{expanded.has(product.gid) ? "▾" : "▸"}</button>
             {product.imageUrl ? <img src={product.imageUrl} alt="" loading="lazy" /> : <span className="bs-product-placeholder" />}
             <div className="bs-product-meta"><b title={product.title ?? "Product"}>{product.title ?? "—"}</b><span className="bs-muted">{product.productType || "Product"} · {product.variantCount} variants · {product.withBarcode} barcoded</span></div>
             <span className={product.stockSum < 0 ? "bs-negative" : "bs-muted"}>Stock {product.stockSum}</span>
@@ -1279,7 +1452,11 @@ export default function PrintLabelsPage() {
           >
             Save PDF
           </s-button>
-          <s-button variant="tertiary" onClick={() => setSelected(new Map())}>
+          <s-button variant="tertiary" onClick={() => {
+            setSelected(new Map());
+            setProductBySelectedGid(new Map());
+            setPreviewPageCount(60);
+          }}>
             Clear
           </s-button>
         </div>
