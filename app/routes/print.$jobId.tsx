@@ -6,6 +6,7 @@ import { printTokenMatchesJob, verifyPrintToken } from "../services/labels/print
 import { layoutJob, readLayoutSnapshot } from "../services/labels/layout.server";
 import { renderPrintLayoutHtml } from "../services/labels/renderer.server";
 import { formatPrice } from "../services/labels/formatPrice";
+import { markOutputOpened } from "../services/printHistoryState.server";
 
 export const meta: MetaFunction = () => [{ title: "Print labels | Barcode Studio" }];
 
@@ -30,6 +31,8 @@ export const loader = async ({ params, request }: LoaderFunctionArgs) => {
     ...snapshot,
     lines: snapshot.lines.map((line) => ({ ...line, price: formatPrice(line.price) })),
   });
+  // A successfully rendered signed output marks the job as opened, not as physically printed.
+  await markOutputOpened(verification.shop, job.id, prisma);
   return {
     jobName: job.name,
     html: renderPrintLayoutHtml(layout, true),

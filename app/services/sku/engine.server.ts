@@ -10,6 +10,7 @@ import { allocateBlock, releaseBlock, type SequenceBlock } from "../barcode/sequ
 import { loadTakenSkuSet } from "../barcode/takenSet.server";
 import { writeProductSkus, type SkuWrite } from "../shopify/barcodeWriter.server";
 import { formatSku, skuBase } from "./abbreviation";
+import { getSkuNumberWidth } from "../settings.server";
 import { missingSkuCount, normalizeSku, SKU_MAX_LENGTH, isSkuMissing } from "./status.server";
 
 /**
@@ -28,7 +29,8 @@ import { missingSkuCount, normalizeSku, SKU_MAX_LENGTH, isSkuMissing } from "./s
  */
 
 const SKU_COUNTER_KEY = "sku.internal";
-const SKU_NUMBER_MIN_WIDTH = 5;
+/** Default minimum number width; overridable via the Settings page (Step 8). */
+export const DEFAULT_SKU_NUMBER_WIDTH = 5;
 const MAX_COLLISIONS_PER_VARIANT = 50;
 /** Above this many distinct products, report progress on the JobRun. */
 const LARGE_BATCH_PRODUCTS = 50;
@@ -73,6 +75,7 @@ export async function planSkuAssignments(
   rows: SkuVariantRow[],
   taken: Set<string>,
   allocate: (n: number) => Promise<SequenceBlock>,
+  numberWidth: number = DEFAULT_SKU_NUMBER_WIDTH,
 ): Promise<SkuPlan> {
   const assignments: SkuAssignment[] = [];
   const blocks: SequenceBlock[] = [];
@@ -104,7 +107,7 @@ export async function planSkuAssignments(
         break;
       }
       const number = await nextNumber();
-      const value = formatSku(base, number, SKU_NUMBER_MIN_WIDTH);
+      const value = formatSku(base, number, numberWidth);
       const normalized = normalizeSku(value);
       if (taken.has(normalized) || intraBatch.has(normalized)) {
         collisions += 1;
@@ -403,7 +406,7 @@ export async function generateSkus(
     }
 
     const taken = await deps.taken();
-    const plan = await planSkuAssignments(rows, taken, deps.allocate);
+    const plan = await planSkuAssignments(rows, taken, deps.allocate, await getSkuNumberWidth(shopDomain));
 
     if (plan.blockers.length > 0) {
       for (const block of plan.blocks) {

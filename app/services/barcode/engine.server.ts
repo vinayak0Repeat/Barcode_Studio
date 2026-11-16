@@ -14,6 +14,8 @@ import {
   type BarcodeRules,
 } from "./validate.server";
 import { duplicateMap } from "./status.server";
+import { WRITE_JOB_TYPES } from "./writeJobTypes.shared";
+export { WRITE_JOB_TYPES } from "./writeJobTypes.shared";
 
 /**
  * Barcode engine: all-or-nothing batch generation, keep-oldest duplicate
@@ -33,12 +35,6 @@ const LARGE_BATCH_PRODUCTS = 50;
  * same shop — whoever claims first wins, the other is rejected with the
  * running JobRun.
  */
-export const WRITE_JOB_TYPES = [
-  "barcode_generate",
-  "barcode_resolve",
-  "sku_generate",
-];
-
 export interface VariantRow {
   gid: string;
   productGid: string;

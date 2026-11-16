@@ -11,6 +11,8 @@ import { gatherDashboardMetrics } from "../services/dashboard/metrics.server";
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: dashboardStyles }];
 export const meta: MetaFunction = () => [{ title: "Barcode Studio | Dashboard" }];
 
+const formatUtc = (date: Date) => new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", dateStyle: "medium", timeStyle: "short" }).format(date);
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
@@ -43,16 +45,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     productCount: metrics.productCount,
     variantCount: metrics.variantCount,
     lastFullSyncAt: syncState?.lastFullSyncAt?.toISOString() ?? null,
+    lastFullSyncAtLabel: syncState?.lastFullSyncAt ? formatUtc(syncState.lastFullSyncAt) : null,
     lastSyncJob: lastSyncJob ? { id: lastSyncJob.id, status: lastSyncJob.status, error: lastSyncJob.error } : null,
     syncRunning: runningSyncJob != null,
     lastWriteJob: lastWriteJob ? { id: lastWriteJob.id, status: lastWriteJob.status, error: lastWriteJob.error } : null,
     writesEnabled: writesEnabledFor(shopId),
     recentActivity: recentActivity.map((row) => ({
       id: row.id, type: row.type, jobName: row.jobId ? jobNameById.get(row.jobId) ?? null : null,
-      productCount: row.productCount, labelCount: row.labelCount, at: row.at.toISOString(),
+      productCount: row.productCount, labelCount: row.labelCount, at: row.at.toISOString(), atLabel: formatUtc(row.at),
     })),
     recentPrintJobs: recentPrintJobs.map((job) => ({
-      id: job.id, name: job.name, labelCount: job.labelCount, at: job.printedAt.toISOString(),
+      id: job.id, name: job.name, labelCount: job.labelCount, at: job.printedAt.toISOString(), atLabel: formatUtc(job.printedAt),
     })),
   };
 };
@@ -68,15 +71,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 function formatDate(iso: string | null): string {
   if (!iso) return "Never";
-  return new Date(iso).toLocaleString();
-}
-
-function relativeTime(iso: string): string {
-  const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
+  return formatUtc(new Date(iso));
 }
 
 function activityLabel(row: { type: string; jobName: string | null; productCount: number; labelCount: number }) {
@@ -143,6 +138,7 @@ export default function Index() {
           <p className="bs-footnote" title="Draft and archived product variants are excluded from these health counts.">Counts include active products only; draft and archived products are excluded.</p>
         </section>
 
+        <p className="bs-footnote">Today and this month use UTC.</p>
         <section className="bs-stat-grid" aria-label="Activity totals">
           <article className="bs-card bs-stat"><span>Labels printed today</span><strong>{metrics.labelsToday}</strong></article>
           <article className="bs-card bs-stat"><span>Barcodes generated today</span><strong>{metrics.generatedToday}</strong></article>
@@ -167,7 +163,7 @@ export default function Index() {
             ) : <ul className="bs-activity-list">
               {page.recentActivity.map((row) => {
                 const icon = row.type === "printed" ? "▤" : row.type === "generated" ? "▥" : row.type === "resolved" ? "✓" : "✎";
-                return <li key={row.id}><span className="bs-activity-icon" aria-hidden="true">{icon}</span><span className="bs-activity-copy">{activityLabel(row)}</span><time dateTime={row.at} title={new Date(row.at).toLocaleString()} aria-label={new Date(row.at).toLocaleString()}>{relativeTime(row.at)}</time></li>;
+                return <li key={row.id}><span className="bs-activity-icon" aria-hidden="true">{icon}</span><span className="bs-activity-copy">{activityLabel(row)}</span><time dateTime={row.at} title={row.atLabel}>{row.atLabel}</time></li>;
               })}
             </ul>}
           </article>
@@ -176,7 +172,7 @@ export default function Index() {
             {page.recentPrintJobs.length === 0 ? (
               <div className="bs-empty"><span aria-hidden="true">▤</span><b>No print jobs yet</b><p>Your recent label jobs will appear here.</p></div>
             ) : <ul className="bs-job-list">
-              {page.recentPrintJobs.map((job) => <li key={job.id}><a href="/app/print-history" aria-label={`View print job ${job.name}, ${job.labelCount} labels`}><span><b>{job.name}</b><small>{job.labelCount} labels</small></span><time dateTime={job.at} title={new Date(job.at).toLocaleString()}>{relativeTime(job.at)}</time></a></li>)}
+              {page.recentPrintJobs.map((job) => <li key={job.id}><a href="/app/print-history" aria-label={`View print job ${job.name}, ${job.labelCount} labels`}><span><b>{job.name}</b><small>{job.labelCount} labels</small></span><time dateTime={job.at} title={job.atLabel}>{job.atLabel}</time></a></li>)}
             </ul>}
           </article>
         </section>
@@ -186,7 +182,7 @@ export default function Index() {
           <section className="bs-footer-section" aria-labelledby="bs-sync-heading">
             <div className="bs-footer-title"><h2 id="bs-sync-heading">Catalog sync</h2><s-badge tone={page.syncRunning ? "caution" : syncFailed ? "critical" : page.lastSyncJob ? "success" : "neutral"}>{page.syncRunning ? "Syncing" : syncFailed ? "Failed" : page.lastSyncJob ? "Done" : "Never run"}</s-badge></div>
             <p>{metrics.productCount.toLocaleString()} products · {metrics.variantCount.toLocaleString()} variants in cache</p>
-            <p>Last sync: {formatDate(page.lastFullSyncAt)}</p>
+            <p>Last sync: {page.lastFullSyncAtLabel ?? formatDate(page.lastFullSyncAt)}</p>
             {syncFailed && page.lastSyncJob?.error && <p className="bs-error-text">{page.lastSyncJob.error}</p>}
             <s-button onClick={startResync} aria-label="Resync product catalog" {...(fetcher.state !== "idle" || page.syncRunning ? { loading: true } : {})}>Resync</s-button>
           </section>

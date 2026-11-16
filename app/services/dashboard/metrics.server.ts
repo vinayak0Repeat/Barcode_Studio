@@ -1,5 +1,6 @@
 import prisma from "../../db.server";
 import { missingSkuCount } from "../sku/status.server";
+import { dayMonthBoundaries } from "../time/timezone.shared";
 
 export interface DashboardMetrics {
   productCount: number;
@@ -19,12 +20,14 @@ export interface UtcPeriods {
   nextMonthStart: Date;
 }
 
+/**
+ * Kept as an exported alias for existing tests/callers. The implementation
+ * now delegates to the shared timezone helper (UTC today because the Shop
+ * model has no cached timezone column); the Print History filters use the
+ * same helper so dashboard stats and history filters can never disagree.
+ */
 export function utcPeriods(now: Date): UtcPeriods {
-  const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const tomorrowStart = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const nextMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
-  return { todayStart, tomorrowStart, monthStart, nextMonthStart };
+  return dayMonthBoundaries(now, null);
 }
 
 type CountRow = Record<string, bigint | number | null>;

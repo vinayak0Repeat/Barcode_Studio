@@ -3,6 +3,7 @@ import prisma from "../db.server";
 import { printTokenMatchesJob, verifyPrintToken } from "../services/labels/printToken.server";
 import { layoutJob, readLayoutSnapshot } from "../services/labels/layout.server";
 import { pdfFilename, renderJobPdfCached } from "../services/labels/pdf.server";
+import { markOutputOpened } from "../services/printHistoryState.server";
 
 export const loader = async ({ params, request }: LoaderFunctionArgs) => {
   const jobId = params.jobId ?? "";
@@ -23,6 +24,7 @@ export const loader = async ({ params, request }: LoaderFunctionArgs) => {
   });
   const pdf = await renderJobPdfCached(job.id, () => layoutJob(snapshot));
   const bytes = Buffer.from(pdf.bytes);
+  await markOutputOpened(verification.shop, job.id, prisma);
   return new Response(bytes, {
     status: 200,
     headers: {

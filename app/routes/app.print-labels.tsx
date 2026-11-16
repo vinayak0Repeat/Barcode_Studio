@@ -40,7 +40,9 @@ import printStyles from "../styles/print-labels.css?url";
 import { barcodeStatuses } from "../services/barcode/status.server";
 import { validateValue } from "../services/barcode/validate.shared";
 import { barcodeLabelStatus } from "../services/barcode/status.shared";
-import { buildPreviewEntries, buildPreviewNotes, countPrintableLabels, previewPage, restorePrintSelection, shouldShowPreviewEmptyState, uniqueBarcodeUrls } from "../services/labels/previewStack.shared";
+import { buildPreviewEntries, buildPreviewNotes, countPrintableLabels, previewPage, shouldShowPreviewEmptyState, uniqueBarcodeUrls } from "../services/labels/previewStack.shared";
+import { diffRestoreLines } from "../services/printHistory.shared";
+import { createPrintedActivity } from "../services/printJobActivity.server";
 import { barcodeEditFailure } from "../services/labels/barcodeEdit.shared";
 
 export const meta: MetaFunction = () => [
@@ -96,7 +98,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // Job restoration is shop-scoped and uses the existing local cache only.
   const restoreId = new URL(request.url).searchParams.get("job");
   const restoreJob = restoreId ? await prisma.printJob.findFirst({ where: { id: restoreId, shopId }, include: { lines: true } }) : null;
-  let restore: null | { id: string; selection: Array<{ gid: string; quantity: number }>; variants: VariantDetail[]; products: PrintLabelProduct[]; sizeId: string; templateId: string; sheetMode: "roll" | "grid"; mode: QuantityMode; toggles: { showProductTitle: boolean; showVariantTitle: boolean; showSku: boolean; showPrice: boolean; showBarcodeText: boolean }; missing: number } = null;
+  let restore: null | { id: string; selection: Array<{ gid: string; quantity: number }>; variants: VariantDetail[]; products: PrintLabelProduct[]; sizeId: string; templateId: string; sheetMode: "roll" | "grid"; mode: QuantityMode; toggles: { showProductTitle: boolean; showVariantTitle: boolean; showSku: boolean; showPrice: boolean; showBarcodeText: boolean }; missing: string[] } = null;
   if (restoreJob) {
     const gids = [...new Set(restoreJob.lines.map((line) => line.variantGid))];
     const cached = await prisma.cachedVariant.findMany({ where: { shopId, gid: { in: gids } }, select: { gid: true, productGid: true, title: true, sku: true, barcode: true, price: true, inventoryQuantity: true } });
@@ -117,8 +119,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const sizeSnap = (restoreJob.sizeSnap ?? {}) as Record<string, unknown>;
     const savedToggles = snap.toggles && typeof snap.toggles === "object" ? snap.toggles as Record<string, unknown> : {};
     const template = templates.find((row) => row.id === restoreJob.templateId) ?? defaultTemplate;
-    const restored = restorePrintSelection(restoreJob.lines, variants);
-    const selection = restored.selection;
+    const restored = diffRestoreLines(restoreJob.lines.map((line) => ({ variantGid: line.variantGid, productName: line.productName, barcode: line.barcode, quantity: line.quantity })), cached.map((row) => ({ gid: row.gid, barcode: row.barcode })));
+    const selection = [...restored.selection].map(([gid, quantity]) => ({ gid, quantity }));
     restore = { id: restoreJob.id, selection, variants, products: restoredProducts,
       sizeId: sizes.some((row) => row.id === sizeSnap.sizeId) ? String(sizeSnap.sizeId) : defaultSizeId,
       templateId: template?.id ?? defaultTemplateId,
@@ -131,7 +133,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         showPrice: typeof savedToggles.showPrice === "boolean" ? savedToggles.showPrice : template.showPrice,
         showBarcodeText: typeof savedToggles.showBarcodeText === "boolean" ? savedToggles.showBarcodeText : template.showBarcodeText,
       } : { showProductTitle: true, showVariantTitle: true, showSku: true, showPrice: false, showBarcodeText: true },
-      missing: restored.missing };
+      missing: restored.missing.map((line) => `${line.productName ?? line.variantGid}: ${line.reason}`) };
   }
 
   return {
@@ -195,7 +197,7 @@ interface ActionResult {
 }
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session, admin } = await authenticate.admin(request);
+  const { session, admin, sessionToken } = await authenticate.admin(request);
   const form = await request.formData();
   const intent = String(form.get("intent") ?? "");
 
@@ -356,6 +358,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const created = await tx.printJob.create({
     data: {
       shopId: session.shop,
+      staffId: typeof sessionToken?.sub === "string" ? sessionToken.sub : null,
       name: jobName,
       templateId: template?.id,
       templateSnap: {
@@ -408,11 +411,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   });
 
   await tx.printJobLine.createMany({ data: plan.lines.map((line) => ({ jobId: created.id, ...line })) });
-  await tx.activity.create({ data: {
-    shopId: session.shop, type: "printed", jobId: created.id,
+  await createPrintedActivity(tx, {
+    shopId: session.shop, jobId: created.id,
+    staffId: typeof sessionToken?.sub === "string" ? sessionToken.sub : null,
     productCount: new Set(plan.lines.map((line) => line.productGid)).size,
     labelCount: plan.labelCount,
-  } });
+  });
   return created;
   });
 
@@ -484,7 +488,7 @@ export default function PrintLabelsPage() {
   const [selected, setSelected] = useState<Map<string, number>>(() => new Map(loaderData.restore?.selection.map(({ gid, quantity }) => [gid, quantity]) ?? []));
   const quantityTouchedGids = useRef(new Set(loaderData.restore?.selection.map(({ gid }) => gid) ?? []));
   const [barcodeByGid, setBarcodeByGid] = useState<Map<string, string | null>>(() => new Map(loaderData.restore?.variants.map((row) => [row.gid, row.barcode]) ?? []));
-  const [restoreNotice, setRestoreNotice] = useState<string | null>(() => loaderData.restore?.missing ? `Could not restore ${loaderData.restore.missing} variant(s) because they are no longer cached or have no barcode.` : null);
+  const [restoreNotice, setRestoreNotice] = useState<string | null>(() => loaderData.restore?.missing.length ? `Could not restore: ${loaderData.restore.missing.join("; ")}` : null);
 
   // ----- banners / result -----
   const [result, setResult] = useState<ActionResult | null>(null);
