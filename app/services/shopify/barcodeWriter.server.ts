@@ -2,8 +2,8 @@ import type { AdminApiContext } from "@shopify/shopify-app-react-router/server";
 import { adminGraphQL, throwUserErrors } from "./client.server";
 
 /**
- * THE ONLY code path allowed to write to Shopify (Step 3 scope: variant
- * barcodes only, via productVariantsBulkUpdate).
+ * THE ONLY code path allowed to write to Shopify (variant barcodes since
+ * Step 3, variant SKUs since Step 5 — both via productVariantsBulkUpdate).
  *
  * Write guard: refuses to run unless ALLOW_SHOPIFY_WRITES is not "false" AND
  * the shop domain is listed in WRITE_ALLOWED_SHOPS (comma-separated).
@@ -12,6 +12,10 @@ import { adminGraphQL, throwUserErrors } from "./client.server";
  * - ProductVariantsBulkInput has a single `barcode` string field in 2026-07
  *   (there is no typed `barcodes` input on this mutation in this version).
  *   This choice is isolated here so it can be switched later.
+ * - The SKU is NOT a field on the variant input: it lives on the variant's
+ *   inventory item, written as `inventoryItem: { sku }`
+ *   (ProductVariantsBulkInput.inventoryItem: InventoryItemInput.sku).
+ *   The mutation still requires only the `write_products` scope.
  * - productVariantsBulkUpdate takes ONE productId per call, so callers group
  *   variants by product; allowPartialUpdates: false keeps each call
  *   all-or-nothing.
@@ -91,6 +95,73 @@ export async function writeProductBarcodes(
     {
       productId,
       variants: updates.map((u) => ({ id: u.variantId, barcode: u.barcode })),
+    },
+  );
+
+  throwUserErrors(
+    "productVariantsBulkUpdate",
+    data.productVariantsBulkUpdate?.userErrors,
+  );
+}
+
+export interface SkuWrite {
+  variantId: string; // variant gid
+  sku: string;
+}
+
+/**
+ * Writes SKUs for the variants of ONE product via productVariantsBulkUpdate
+ * with `inventoryItem: { sku }` (allowPartialUpdates: false). Same guard,
+ * same throttle-aware client, same error surfacing as the barcode writer.
+ * Never touches barcode, price or inventory quantities.
+ */
+export async function writeProductSkus(
+  shopDomain: string,
+  admin: AdminApiContext,
+  productId: string,
+  updates: SkuWrite[],
+): Promise<void> {
+  assertWriteAllowed(shopDomain);
+
+  const data = await adminGraphQL<{
+    productVariantsBulkUpdate: {
+      productVariants: Array<{
+        id: string;
+        sku: string | null;
+        barcode: string | null;
+      }>;
+      userErrors: Array<{ field?: string[]; message?: string }>;
+    };
+  }>(
+    admin,
+    /* GraphQL */ `
+      mutation SetVariantSkus(
+        $productId: ID!
+        $variants: [ProductVariantsBulkInput!]!
+      ) {
+        productVariantsBulkUpdate(
+          productId: $productId
+          variants: $variants
+          allowPartialUpdates: false
+        ) {
+          productVariants {
+            id
+            sku
+            barcode
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `,
+    {
+      productId,
+      variants: updates.map((u) => ({
+        id: u.variantId,
+        inventoryItem: { sku: u.sku },
+      })),
     },
   );
 

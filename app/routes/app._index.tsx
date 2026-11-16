@@ -113,7 +113,7 @@ export default function Index() {
     { label: "With Barcode", value: coverage.withBarcode, href: "/app/generator?filter=has", aria: "View variants with barcode" },
     { label: "Missing Barcode", value: missingCount, href: "/app/generator?filter=missing", aria: "View variants missing barcodes", accent: "warning" },
     { label: "Duplicate Barcode", value: duplicateCount, href: "/app/generator/duplicates", aria: "View duplicate barcodes", accent: "critical" },
-    { label: "Missing SKU", value: metrics.missingSkuCount, href: "/app/generator", aria: "Informational count of active variants missing SKU", accent: "warning", info: true },
+    { label: "Missing SKU", value: metrics.missingSkuCount, href: "/app/sku-generator?filter=missing", aria: "View variants missing SKUs", accent: "warning" },
   ];
 
   return (
@@ -154,8 +154,7 @@ export default function Index() {
           {tiles.map((tile) => (
             <a key={tile.label} className={`bs-card bs-kpi ${tile.accent ? `bs-accent-${tile.accent}` : ""}`} href={tile.href} aria-label={`${tile.aria}: ${tile.value}`}>
               <span>{tile.label}</span><strong>{tile.value.toLocaleString()}</strong>
-              {(tile.label === "Missing Barcode" || tile.label === "Duplicate Barcode") && tile.value === 0 && <em>All good</em>}
-              {tile.info && <small>Read-only · SKU generation is not available yet</small>}
+              {(tile.label === "Missing Barcode" || tile.label === "Duplicate Barcode" || tile.label === "Missing SKU") && tile.value === 0 && <em>All good</em>}
             </a>
           ))}
         </section>

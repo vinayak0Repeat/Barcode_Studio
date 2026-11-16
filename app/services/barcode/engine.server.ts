@@ -27,7 +27,17 @@ import { duplicateMap } from "./status.server";
 const MAX_COLLISIONS_PER_VARIANT = 50;
 /** Above this many distinct products, run as a progress-tracked JobRun. */
 const LARGE_BATCH_PRODUCTS = 50;
-const WRITE_JOB_TYPES = ["barcode_generate", "barcode_resolve"];
+/**
+ * Job types that hold the per-shop WRITE lock. SHARED with the SKU engine
+ * (Step 5): a barcode job and a SKU job must never run concurrently for the
+ * same shop — whoever claims first wins, the other is rejected with the
+ * running JobRun.
+ */
+export const WRITE_JOB_TYPES = [
+  "barcode_generate",
+  "barcode_resolve",
+  "sku_generate",
+];
 
 export interface VariantRow {
   gid: string;
@@ -389,7 +399,8 @@ export function buildRealDeps(
 // ---------------------------------------------------------------------------
 // Preconditions + JobRun helpers
 
-async function assertSafeToWrite(shopDomain: string) {
+/** Shared with the SKU engine (Step 5). */
+export async function assertSafeToWrite(shopDomain: string) {
   const syncState = await prisma.syncState.findUnique({
     where: { shopId: shopDomain },
   });
@@ -408,9 +419,10 @@ async function assertSafeToWrite(shopDomain: string) {
   }
 }
 
-async function claimWriteJob(
+/** Shared with the SKU engine (Step 5): claims the per-shop write lock. */
+export async function claimWriteJob(
   shopDomain: string,
-  type: "barcode_generate" | "barcode_resolve",
+  type: "barcode_generate" | "barcode_resolve" | "sku_generate",
   params: object,
 ) {
   const running = await prisma.jobRun.findFirst({
@@ -424,7 +436,8 @@ async function claimWriteJob(
   return { jobRun, created: true as const };
 }
 
-async function finishJob(
+/** Shared with the SKU engine (Step 5). */
+export async function finishJob(
   jobId: string,
   status: string,
   extra: { error?: string; result?: object; progress?: { done: number; total: number } } = {},

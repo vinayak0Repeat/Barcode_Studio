@@ -1,4 +1,5 @@
 import prisma from "../../db.server";
+import { missingSkuCount } from "../sku/status.server";
 
 export interface DashboardMetrics {
   productCount: number;
@@ -32,13 +33,14 @@ const asCount = (value: bigint | number | null | undefined) => Number(value ?? 0
 /** One active-only catalog aggregate and two time-window aggregates. */
 export async function gatherDashboardMetrics(shopId: string, now = new Date()): Promise<DashboardMetrics> {
   const periods = utcPeriods(now);
-  const [catalogRows, jobRows, activityRows] = await Promise.all([
+  // missingSkuCount comes from the shared SKU status helper so the dashboard
+  // tile, the SKU Generator filter and the report all use ONE number.
+  const [catalogRows, jobRows, activityRows, missingSkus] = await Promise.all([
     prisma.$queryRaw<Array<CountRow>>`
       SELECT
         COUNT(DISTINCT p."gid") AS "productCount",
         COUNT(v."gid") AS "variantCount",
-        COUNT(v."gid") FILTER (WHERE p."status" = 'ACTIVE' AND v."barcode" IS NOT NULL AND v."barcode" <> '') AS "withBarcodeCount",
-        COUNT(v."gid") FILTER (WHERE p."status" = 'ACTIVE' AND (v."sku" IS NULL OR BTRIM(v."sku") = '')) AS "missingSkuCount"
+        COUNT(v."gid") FILTER (WHERE p."status" = 'ACTIVE' AND v."barcode" IS NOT NULL AND v."barcode" <> '') AS "withBarcodeCount"
       FROM "CachedProduct" p
       LEFT JOIN "CachedVariant" v
         ON v."shopId" = p."shopId" AND v."productGid" = p."gid"
@@ -62,6 +64,7 @@ export async function gatherDashboardMetrics(shopId: string, now = new Date()): 
       FROM "Activity"
       WHERE "shopId" = ${shopId}
     `,
+    missingSkuCount(shopId),
   ]);
   const catalog = catalogRows[0] ?? {};
   const jobs = jobRows[0] ?? {};
@@ -70,7 +73,7 @@ export async function gatherDashboardMetrics(shopId: string, now = new Date()): 
     productCount: asCount(catalog.productCount),
     variantCount: asCount(catalog.variantCount),
     withBarcodeCount: asCount(catalog.withBarcodeCount),
-    missingSkuCount: asCount(catalog.missingSkuCount),
+    missingSkuCount: missingSkus,
     labelsToday: asCount(jobs.labelsToday),
     labelsThisMonth: asCount(jobs.labelsThisMonth),
     generatedToday: asCount(activity.generatedToday),
