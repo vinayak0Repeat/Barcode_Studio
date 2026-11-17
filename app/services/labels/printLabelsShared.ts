@@ -194,7 +194,7 @@ export interface ParentCheckboxState {
 export function parentCheckboxState(args: {
   selected: ReadonlyMap<string, number>;
   productGid: string;
-  /** Selectable (barcoded) variant gids when the product's variants are loaded. */
+  /** Variant gids when the product's variants are loaded. */
   selectableGids: readonly string[] | null;
   productBySelectedGid: ReadonlyMap<string, string>;
   /** A click has selected this product while its variants are still loading. */

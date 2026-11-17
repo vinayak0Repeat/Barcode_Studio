@@ -444,7 +444,6 @@ const GENERATE_MODAL_ID = "print-labels-generate-modal";
 function ParentCheckbox(props: {
   checked: boolean;
   indeterminate: boolean;
-  disabled: boolean;
   label: string;
   pending: boolean;
   onChange: () => void;
@@ -461,7 +460,6 @@ function ParentCheckbox(props: {
         type="checkbox"
         aria-label={props.label}
         checked={props.checked}
-        disabled={props.disabled}
         onMouseEnter={props.onPrefetch}
         onFocus={props.onPrefetch}
         onChange={props.onChange}
@@ -946,9 +944,7 @@ export default function PrintLabelsPage() {
   const parentCheckbox = (product: PrintLabelProduct) => {
     const key = cacheKeyFor(product.gid);
     const cached = variantCache[key];
-    const selectableGids = cached
-      ? cached.filter((variant) => variant.barcode).map((variant) => variant.gid)
-      : null;
+    const selectableGids = cached ? cached.map((variant) => variant.gid) : null;
     const state = parentCheckboxState({
       selected,
       productGid: product.gid,
@@ -1205,22 +1201,28 @@ export default function PrintLabelsPage() {
           <label>Size <select value={sizeId} onChange={(event) => setSizeId(event.target.value)}>{loaderData.sizes.map((size) => <option key={size.id} value={size.id}>{size.name} ({size.widthMm}×{size.heightMm} mm)</option>)}</select></label>
           </div>
           <div className="bs-print-toolbar-row bs-print-toolbar-actions">
-          <s-button
-            variant="secondary"
-            icon="barcode"
-            onClick={() => showModal(GENERATE_MODAL_ID)}
-            accessibilityLabel="Generate barcodes for the selected variants without one"
-            {...(busy || generateState.disabled ? { disabled: true } : {})}
-          >
-            Generate Barcode{generateState.labelSuffix}
-          </s-button>
-          <span className="bs-disabled-tooltip" title="Coming soon (Step 5)"><s-button variant="tertiary" disabled accessibilityLabel="Generate SKU — coming soon in Step 5">Generate SKU</s-button></span>
-          <s-button variant="secondary" icon="checkbox" onClick={() => void selectAllProducts()} {...(loadingMore || selectingAll || busy ? { disabled: true } : {})}>Select All Products</s-button>
-          <label className="bs-print-control bs-quantity-control"><s-icon type="inventory" size="small" aria-hidden="true"></s-icon><select aria-label="Quantity mode" value={mode} onChange={(event) => setMode(event.target.value as QuantityMode)}><option value="stock">Use Stock Qty</option><option value="fixed">Fixed</option></select></label>
-          <details className="bs-clear-qty"><summary><s-icon type="broom" size="small" aria-hidden="true"></s-icon>Clear Qty</summary><div className="bs-clear-qty-menu"><button type="button" onClick={() => clearQty("reset")}>Reset to 1</button><button type="button" onClick={() => clearQty("zero")}>Set to 0</button></div></details>
-          <s-button variant="primary" onClick={() => submitPrint("print")} {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true } : {})}>Print</s-button>
-          <s-button variant="secondary" icon="download" onClick={() => submitPrint("pdf")} {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true, loading: busy } : {})}>{busy ? "Preparing PDF…" : "Save PDF"}</s-button>
-          <s-link href="/app/generator">Generator</s-link>
+          <div className="bs-print-action-group">
+            <s-button
+              variant="secondary"
+              icon="barcode"
+              onClick={() => showModal(GENERATE_MODAL_ID)}
+              accessibilityLabel="Generate barcodes for the selected variants without one"
+              {...(busy || generateState.disabled ? { disabled: true } : {})}
+            >
+              Generate Barcode{generateState.labelSuffix}
+            </s-button>
+            <span className="bs-disabled-tooltip" title="Coming soon (Step 5)"><s-button variant="tertiary" disabled accessibilityLabel="Generate SKU — coming soon in Step 5">Generate SKU</s-button></span>
+          </div>
+          <div className="bs-print-action-group">
+            <s-button variant="secondary" icon="checkbox" onClick={() => void selectAllProducts()} {...(loadingMore || selectingAll || busy ? { disabled: true } : {})}>Select All Products</s-button>
+            <label className="bs-print-control bs-quantity-control"><s-icon type="inventory" size="small" aria-hidden="true"></s-icon><select aria-label="Quantity mode" value={mode} onChange={(event) => setMode(event.target.value as QuantityMode)}><option value="stock">Use Stock Qty</option><option value="fixed">Fixed</option></select></label>
+            <details className="bs-clear-qty"><summary><s-icon type="broom" size="small" aria-hidden="true"></s-icon>Clear Qty</summary><div className="bs-clear-qty-menu"><button type="button" onClick={() => clearQty("reset")}>Reset to 1</button><button type="button" onClick={() => clearQty("zero")}>Set to 0</button></div></details>
+          </div>
+          <div className="bs-print-action-group bs-print-output-actions">
+            <s-button variant="primary" onClick={() => submitPrint("print")} {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true } : {})}>Print</s-button>
+            <s-button variant="secondary" icon="download" onClick={() => submitPrint("pdf")} {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true, loading: busy } : {})}>{busy ? "Preparing PDF…" : "Save PDF"}</s-button>
+            <s-link href="/app/generator">Generator</s-link>
+          </div>
           </div>
         </div>
         <div className="bs-print-showing">Showing {products.length} of {total} product(s){missingSelectedNoteCount > 0 && <span className="bs-print-selection-note">{missingSelectedNoteCount} selected without barcode (not printed)</span>}{selected.size > 0 && totalLabels === 0 && missingSelectedCount > 0 && <span className="bs-print-empty-hint">Generate barcodes first</span>}</div>
@@ -1239,6 +1241,9 @@ export default function PrintLabelsPage() {
       <div className="bs-print-body">
       <div className="bs-print-products">
       <section className="bs-product-browser">
+        <div className="bs-product-table-head" aria-hidden="true">
+          <span></span><span></span><span>Product</span><span>Stock</span><span>Barcode</span><span>Variants</span>
+        </div>
         {products.map((product) => {
           const productVariants = Object.values(variantCache).flat().filter((variant) => variant.productGid === product.gid);
           const hasInvalid = productVariants.some((variant) => variant.barcode && validateValue(variant.barcode, { type: previewType, length: loaderData.barcodeLength }).length > 0);
@@ -1248,31 +1253,29 @@ export default function PrintLabelsPage() {
           const parentState = parentCheckboxState({
             selected,
             productGid: product.gid,
-            selectableGids: productCachedVariants
-              ? productCachedVariants.filter((variant) => variant.barcode).map((variant) => variant.gid)
-              : null,
+            selectableGids: productCachedVariants?.map((variant) => variant.gid) ?? null,
             productBySelectedGid,
             optimisticallySelected: pendingProducts.has(product.gid),
           });
           return <Fragment key={product.gid}>
-          <div className="bs-product-card" id={`product-${product.gid}`}>
+          <div className={`bs-product-card${parentState.checked || parentState.indeterminate ? " is-selected" : ""}`} id={`product-${product.gid}`}>
             <ParentCheckbox
               label={`Select all variants of ${product.title ?? "product"}`}
               checked={parentState.checked}
               indeterminate={parentState.indeterminate}
-              disabled={product.withBarcode === 0}
               pending={pendingProducts.has(product.gid)}
               onChange={() => parentCheckbox(product)}
               onPrefetch={() => void ensureVariantsLoaded([product.gid])}
             />
-            <button className="bs-product-expand" type="button" aria-label={`${expanded.has(product.gid) ? "Collapse" : "Expand"} ${product.title ?? "product"}`} onMouseEnter={() => void ensureVariantsLoaded([product.gid])} onFocus={() => void ensureVariantsLoaded([product.gid])} onClick={() => expandProduct(product.gid)}>▸</button>
             {product.imageUrl ? <img src={product.imageUrl} alt="" loading="lazy" /> : <span className="bs-product-placeholder"><s-icon type="image" size="small" aria-hidden="true"></s-icon></span>}
             <div className="bs-product-meta"><b title={product.title ?? "Product"}>{product.title ?? "—"}</b><span className="bs-muted">{product.productType || "Product"} · {product.variantCount} variants · {product.withBarcode} barcoded</span></div>
-            <span className={product.stockSum <= 0 ? "bs-negative" : "bs-muted"}>Stock {product.stockSum}</span>
+            <span className={`bs-stock ${product.stockSum < 0 ? "bs-stock-negative" : product.stockSum === 0 ? "bs-stock-zero" : "bs-stock-positive"}`}>Stock {product.stockSum}</span>
             <span className="bs-product-status"><s-badge tone={productStatus === "Ready" ? "success" : productStatus === "Missing" ? "caution" : "critical"}>{productStatus}</s-badge></span>
-            <s-button variant="tertiary" onClick={() => expandProduct(product.gid)}>{expanded.has(product.gid) ? "Collapse" : "Expand"}</s-button>
+            <button className="bs-product-expand" type="button" onMouseEnter={() => void ensureVariantsLoaded([product.gid])} onFocus={() => void ensureVariantsLoaded([product.gid])} onClick={() => expandProduct(product.gid)}>{expanded.has(product.gid) ? "Collapse" : "Expand"}</button>
           </div>
-          {expanded.has(product.gid) && <div className="bs-variant-list">{variantCache[cacheKeyFor(product.gid)]?.map((variant) => {
+          {expanded.has(product.gid) && <div className="bs-variant-list">
+            <div className="bs-variant-head" aria-hidden="true"><span></span><span>Variant</span><span>SKU</span><span>Barcode</span><span>Price</span><span>Stock</span><span>Status</span><span>Qty</span></div>
+            {variantCache[cacheKeyFor(product.gid)]?.map((variant) => {
             const statusInfo = barcodeLabelStatus(variant.barcode, variant.barcodeStatus === "duplicate", { type: previewType, length: loaderData.barcodeLength });
             const invalidReason = statusInfo.status === "Invalid" ? statusInfo.reason : null;
             const status = statusInfo.status;
@@ -1281,7 +1284,7 @@ export default function PrintLabelsPage() {
               <span className="bs-variant-name" title={variant.title ?? "Variant"}>{variant.title ?? "—"}</span>
               <span className="bs-variant-sku">{variant.sku ?? "—"}</span>
               <label><span className="bs-muted">Barcode</span><input aria-label={`Barcode for ${variant.title ?? "variant"}`} value={editingBarcode[variant.gid] ?? variant.barcode ?? ""} disabled={savingBarcode.has(variant.gid)} onFocus={() => setEditingBarcode((prev) => ({ ...prev, [variant.gid]: variant.barcode ?? "" }))} onChange={(event) => setEditingBarcode((prev) => ({ ...prev, [variant.gid]: event.target.value }))} onBlur={() => { if (cancelBarcodeSave.current.delete(variant.gid)) return; if ((editingBarcode[variant.gid] ?? variant.barcode ?? "") !== (variant.barcode ?? "")) saveBarcode(variant.gid); }} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); (event.currentTarget as HTMLInputElement).blur(); } if (event.key === "Escape") { cancelBarcodeSave.current.add(variant.gid); setEditingBarcode((prev) => ({ ...prev, [variant.gid]: variant.barcode ?? "" })); (event.currentTarget as HTMLInputElement).blur(); } }} />{!variant.barcode && <a href="/app/generator?filter=missing">Add barcode</a>}</label>
-              <span>{variant.price ?? "—"}</span><span className={variant.inventoryQuantity != null && variant.inventoryQuantity < 0 ? "bs-negative" : ""}>{variant.inventoryQuantity ?? "—"}</span>
+              <span>{variant.price ?? "—"}</span><span className={`bs-stock ${variant.inventoryQuantity == null ? "" : variant.inventoryQuantity < 0 ? "bs-stock-negative" : variant.inventoryQuantity === 0 ? "bs-stock-zero" : "bs-stock-positive"}`}>{variant.inventoryQuantity ?? "—"}</span>
               <div className="bs-variant-status"><span className="bs-status-pill"><s-badge tone={status === "Ready" ? "success" : status === "Missing" ? "caution" : "critical"} aria-label={statusInfo.ariaLabel}>{status}</s-badge></span>{statusInfo.reason && status !== "Missing" && <span className="bs-muted" title={statusInfo.reason}>{statusInfo.reason}</span>}</div>
               {selected.has(variant.gid) && <span className="bs-qty-controls"><button type="button" onClick={() => setQty(variant.gid, selected.get(variant.gid)! - 1)}>−</button><input aria-label="Quantity" type="number" min="0" max={DEFAULT_CAP_PER_VARIANT} value={selected.get(variant.gid)} onChange={(event) => setQty(variant.gid, event.target.value)} /><button type="button" onClick={() => setQty(variant.gid, selected.get(variant.gid)! + 1)}>+</button></span>}
               {(barcodeErrors[variant.gid] || barcodeSaved[variant.gid]) && <div className="bs-row-banner"><s-banner tone={barcodeErrors[variant.gid] ? "critical" : "success"}>{barcodeErrors[variant.gid] ?? barcodeSaved[variant.gid]}<button type="button" onClick={() => { setBarcodeErrors((prev) => { const next = { ...prev }; delete next[variant.gid]; return next; }); setBarcodeSaved((prev) => { const next = { ...prev }; delete next[variant.gid]; return next; }); }}>Dismiss</button></s-banner></div>}
