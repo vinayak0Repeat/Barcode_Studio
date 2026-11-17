@@ -7,21 +7,23 @@ import prisma from "../db.server";
 import { fullSync } from "../services/catalog/sync.server";
 import { gatherCoverage, writesEnabledFor } from "../services/reports/metrics.server";
 import { gatherDashboardMetrics, labelsPerDay } from "../services/dashboard/metrics.server";
-import { AreaChart, BarChart, RadialProgress } from "../components/charts";
+import { BarChart, RadialProgress } from "../components/charts";
 
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: dashboardStyles }];
 export const meta: MetaFunction = () => [{ title: "Barcode Studio | Dashboard" }];
 
 const formatUtc = (date: Date) => new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", dateStyle: "medium", timeStyle: "short" }).format(date);
+const formatUtcDate = (date: Date) => new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", dateStyle: "medium" }).format(date);
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
+  const now = new Date();
 
   const [coverage, metrics, syncState, lastSyncJob, runningSyncJob, recentActivity, lastWriteJob, recentPrintJobs, perDay] =
     await Promise.all([
       gatherCoverage(shopId),
-      gatherDashboardMetrics(shopId),
+      gatherDashboardMetrics(shopId, now),
       prisma.syncState.findUnique({ where: { shopId } }),
       prisma.jobRun.findFirst({ where: { shopId, type: "catalog_sync" }, orderBy: { createdAt: "desc" } }),
       prisma.jobRun.findFirst({ where: { shopId, type: "catalog_sync", status: "running" } }),
@@ -31,7 +33,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         where: { shopId }, orderBy: { printedAt: "desc" }, take: 5,
         select: { id: true, name: true, labelCount: true, printedAt: true },
       }),
-      labelsPerDay(shopId, 14),
+      labelsPerDay(shopId, 14, now),
     ]);
 
   const activityJobIds = recentActivity.filter((row) => row.type === "printed" && row.jobId).map((row) => row.jobId!);
@@ -42,6 +44,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return {
     shop: shopId,
+    today: now.toISOString(),
+    todayLabel: formatUtcDate(now),
     coverage,
     metrics,
     perDay,
@@ -105,17 +109,8 @@ export default function Index() {
   const readyCount = Math.max(0, coverage.totalActiveVariants - missingCount - duplicateCount);
   const coveragePct = coverage.coveragePercent;
   const syncFailed = page.lastSyncJob?.status === "failed";
-  const tiles = [
-    { label: "Total Products", value: metrics.productCount, href: "/app/print-labels", aria: "Open Print Labels" },
-    { label: "Total Variants", value: metrics.variantCount, href: "/app/generator", aria: "Open Generator" },
-    { label: "With Barcode", value: coverage.withBarcode, href: "/app/generator?filter=has", aria: "View variants with barcode" },
-    { label: "Missing Barcode", value: missingCount, href: "/app/generator?filter=missing", aria: "View variants missing barcodes", accent: "warning" },
-    { label: "Duplicate Barcode", value: duplicateCount, href: "/app/generator/duplicates", aria: "View duplicate barcodes", accent: "critical" },
-    { label: "Missing SKU", value: metrics.missingSkuCount, href: "/app/sku-generator?filter=missing", aria: "View variants missing SKUs", accent: "warning" },
-  ];
-
   const perDayBars = page.perDay.map((point) => ({
-    label: point.day.slice(5),
+    label: point.day.slice(-2),
     value: point.labelCount,
   }));
   const perDayTotal = page.perDay.reduce((sum, point) => sum + point.labelCount, 0);
@@ -140,18 +135,18 @@ export default function Index() {
             </p>
             <div className="bs-segment-bar" aria-label="Barcode status split">
               {statusRows.slice(0, 3).map((row) => (
-                <a key={row.name} className={`bs-segment`} href={row.href} aria-label={`${row.name}: ${row.count}`}>
+                <a key={row.name} className={`bs-segment bs-segment-${row.name.toLowerCase()}`} href={row.href} aria-label={`${row.name}: ${row.count}`}>
                   <span className="bs-segment-label">
                     <span className="bs-segment-name">{row.name}</span>
                     <span className="bs-segment-pct">
                       {Math.round((100 * row.count) / totalForPct)}%
                     </span>
                   </span>
-                  <span
-                    className={`bs-pill ${row.name === "Ready" ? "bs-pill-dark" : row.name === "Missing" ? "bs-pill-yellow" : "bs-pill-hatch"}`}
-                    style={{ justifyContent: "center" }}
-                  >
+                  <span className="bs-segment-count bs-num">
                     {row.count.toLocaleString()}
+                  </span>
+                  <span className="bs-segment-track" aria-hidden="true">
+                    <span style={{ width: `${Math.round((100 * row.count) / totalForPct)}%` }} />
                   </span>
                 </a>
               ))}
@@ -159,6 +154,7 @@ export default function Index() {
           </div>
           <div className="bs-header-actions">
             <button type="button" className="bs-btn bs-btn-secondary" aria-label="Refresh dashboard metrics" onClick={() => revalidator.revalidate()} disabled={refreshing}>
+              <svg className={refreshing ? "bs-refresh-icon is-refreshing" : "bs-refresh-icon"} viewBox="0 0 20 20" aria-hidden="true"><path d="M16.2 8A6.5 6.5 0 0 0 5 4.6L3.5 6M3.5 6V2.8M3.5 6h3.2M3.8 12A6.5 6.5 0 0 0 15 15.4l1.5-1.4m0 0v3.2m0-3.2h-3.2" /></svg>
               {refreshing ? "Refreshing…" : "Refresh"}
             </button>
           </div>
@@ -212,15 +208,29 @@ export default function Index() {
             </div>
           </article>
 
-          {/* Today's stats (big numbers) */}
-          <article className="bs-card bs-bento-summary" aria-label="Activity totals">
-            <div className="bs-card-title"><h3>Today</h3><span className="bs-card-sub">UTC</span></div>
-            <div className="bs-header-numbers">
-              <div className="bs-big-number"><span className="bs-big-number-label">Labels</span><span className="bs-big-number-value">{metrics.labelsToday.toLocaleString()}</span><span className="bs-big-number-secondary">{metrics.labelsThisMonth.toLocaleString()} this month</span></div>
-              <div className="bs-big-number"><span className="bs-big-number-label">Generated</span><span className="bs-big-number-value">{metrics.generatedToday.toLocaleString()}</span><span className="bs-big-number-secondary">barcodes today</span></div>
-              <div className="bs-big-number"><span className="bs-big-number-label">Resolved</span><span className="bs-big-number-value">{metrics.resolvedToday.toLocaleString()}</span><span className="bs-big-number-secondary">duplicates today</span></div>
+          {/* Daily performance: printed labels lead, with two supporting measures. */}
+          <article className="bs-card bs-bento-summary" aria-label="Daily performance metrics">
+            <div className="bs-card-title">
+              <h3>Daily Performance</h3>
+              <time className="bs-date-chip" dateTime={page.today.slice(0, 10)}>{page.todayLabel} <span>UTC</span></time>
             </div>
-            <AreaChart className="bs-chart bs-chart-sm" values={page.perDay.map((point) => point.labelCount)} label="Labels printed, last 14 days (area)" />
+            <div className="bs-today-primary">
+              <span className="bs-today-primary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 6.5h18v11H3zM6.5 9v6m3-6v6m3-6v6m3-6v6m3-6v6" /></svg></span>
+              <div className="bs-today-primary-copy">
+                <span className="bs-today-primary-label">Labels printed today</span>
+                <strong className="bs-today-primary-value bs-num">{metrics.labelsToday.toLocaleString()}</strong>
+              </div>
+            </div>
+            <div className="bs-today-secondary">
+              <div className="bs-today-secondary-item">
+                <span className="bs-today-secondary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></span>
+                <div><strong className="bs-today-secondary-value bs-num">{metrics.generatedToday.toLocaleString()}</strong><span className="bs-today-secondary-label">Barcodes generated</span></div>
+              </div>
+              <div className="bs-today-secondary-item">
+                <span className="bs-today-secondary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5m-4-1a7 7 0 0 1 12-4l3 3M4 14l3 3a7 7 0 0 0 12-4" /></svg></span>
+                <div><strong className="bs-today-secondary-value bs-num">{metrics.resolvedToday.toLocaleString()}</strong><span className="bs-today-secondary-label">Duplicates resolved</span></div>
+              </div>
+            </div>
           </article>
 
           {/* Attention needed (dark anchor card) */}
