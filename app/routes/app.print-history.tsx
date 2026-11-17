@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type {
   ActionFunctionArgs,
+  LinksFunction,
   LoaderFunctionArgs,
   MetaFunction,
 } from "react-router";
@@ -18,6 +19,9 @@ import {
 import { dayMonthBoundaries } from "../services/time/timezone.shared";
 import { issueReprintUrls } from "../services/reprint.server";
 import { openPrintWindow } from "../services/labels/openPrintWindow.shared";
+import adminStyles from "../styles/label-admin.css?url";
+
+export const links: LinksFunction = () => [{ rel: "stylesheet", href: adminStyles }];
 
 export const meta: MetaFunction = () => [
   { title: "Print History | Barcode Studio" },
@@ -229,6 +233,7 @@ export default function PrintHistoryPage() {
 
   return (
     <s-page heading="Print History">
+      <main className="bs-history-page bs-history-list-page">
       <s-section>
         <s-text color="subdued">Times shown in {loaderData.timeZone}.</s-text>
         <s-stack direction="inline" gap="base">
@@ -446,6 +451,7 @@ export default function PrintHistoryPage() {
           </s-stack>
         )}
       </s-section>
+      </main>
     </s-page>
   );
 }

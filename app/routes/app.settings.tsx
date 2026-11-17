@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type {
   ActionFunctionArgs,
+  LinksFunction,
   LoaderFunctionArgs,
   MetaFunction,
 } from "react-router";
@@ -13,6 +14,9 @@ import {
 } from "../services/settings.server";
 import { BARCODE_LENGTH_MAX, BARCODE_LENGTH_MIN, SKU_NUMBER_WIDTH_MAX, SKU_NUMBER_WIDTH_MIN } from "../services/settings.shared";
 import { WRITE_JOB_TYPES } from "../services/barcode/engine.server";
+import adminStyles from "../styles/label-admin.css?url";
+
+export const links: LinksFunction = () => [{ rel: "stylesheet", href: adminStyles }];
 
 export const meta: MetaFunction = () => [{ title: "Settings | Barcode Studio" }];
 
@@ -133,6 +137,7 @@ export default function SettingsPage() {
 
   return (
     <s-page heading="Settings">
+      <main className="bs-settings-page">
       {result && (
         <s-banner tone={result.ok ? "success" : "critical"}>
           {result.message}
@@ -318,6 +323,7 @@ export default function SettingsPage() {
         </s-button>
         {!dirty && <s-text color="subdued"> No changes to save.</s-text>}
       </s-section>
+      </main>
     </s-page>
   );
 }

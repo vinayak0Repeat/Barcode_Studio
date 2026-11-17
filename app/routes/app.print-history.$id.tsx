@@ -1,5 +1,6 @@
 import type {
   ActionFunctionArgs,
+  LinksFunction,
   LoaderFunctionArgs,
   MetaFunction,
 } from "react-router";
@@ -12,7 +13,10 @@ import { issueReprintUrls } from "../services/reprint.server";
 import { SIGNED_OUTPUT_ANCHOR_PROPS } from "../services/labels/outputAnchor.shared";
 import { PrintTargetFormButton } from "../components/PrintTargetFormButton";
 import { printWindowErrorResponse } from "../services/labels/printWindowError.server";
+import adminStyles from "../styles/label-admin.css?url";
 const formatUtc = (date: Date) => new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", dateStyle: "medium", timeStyle: "short" }).format(date);
+
+export const links: LinksFunction = () => [{ rel: "stylesheet", href: adminStyles }];
 
 export const meta: MetaFunction = () => [
   { title: "Print job | Barcode Studio" },
@@ -132,6 +136,7 @@ export default function PrintJobDetailPage() {
 
   return (
     <s-page heading={job.name}>
+      <main className="bs-history-page">
       <s-section heading="Summary">
         <s-text color="subdued">Times shown in UTC.</s-text>
         <s-unordered-list>
@@ -216,6 +221,7 @@ export default function PrintJobDetailPage() {
           {" "}<s-link href="/app/print-history">Print History</s-link>
         </s-banner>
       )}
+      </main>
     </s-page>
   );
 }
