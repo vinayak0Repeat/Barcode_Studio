@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import type {
   ActionFunctionArgs,
+  LinksFunction,
   LoaderFunctionArgs,
   MetaFunction,
 } from "react-router";
 import { data, useFetcher, useLoaderData, useRevalidator, useSearchParams } from "react-router";
 import { authenticate } from "../shopify.server";
+import generatorStyles from "../styles/generator-pages.css?url";
 import prisma from "../db.server";
 import { variantRows } from "../services/catalog/search.server";
 import { statusCounts, duplicateMap } from "../services/barcode/status.server";
@@ -19,6 +21,7 @@ import {
 export const meta: MetaFunction = () => [
   { title: "Barcode Generator | Barcode Studio" },
 ];
+export const links: LinksFunction = () => [{ rel: "stylesheet", href: generatorStyles }];
 
 const PAGE_SIZE = 25;
 /** Intentionally disabled (mirrors the Odoo module). Engine support exists. */
@@ -296,11 +299,15 @@ export default function GeneratorPage() {
 
   return (
     <s-page heading="Barcode Generator">
-      <s-section>
-        <s-paragraph>
+      <main className="bs-generator-layout bs-generator-barcode">
+        <header className="bs-generator-page-head">
+          <h1>Barcode Generator</h1>
+          <p>
           {loaderData.counts.total} variants in cache · {loaderData.counts.ready} ready ·{" "}
           {loaderData.counts.missing} missing · {loaderData.counts.duplicate} duplicate
-        </s-paragraph>
+          </p>
+        </header>
+      <s-section>
         <s-stack direction="inline" gap="base">
           <s-button
             variant="primary"
@@ -457,32 +464,23 @@ export default function GeneratorPage() {
                   />
                 </s-table-cell>
                 <s-table-cell>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div className="bs-generator-product-cell">
                     {row.imageUrl ? (
                       <img
+                        className="bs-generator-thumbnail"
                         src={row.imageUrl}
                         alt=""
                         loading="lazy"
-                        style={{ width: 32, height: 32, objectFit: "cover", borderRadius: 4 }}
                       />
                     ) : (
                       <span
+                        className="bs-generator-placeholder"
                         aria-hidden="true"
-                        style={{
-                          display: "inline-block",
-                          width: 32,
-                          height: 32,
-                          borderRadius: 4,
-                          background: "#f0f0f0",
-                          border: "1px solid #e0e0e0",
-                        }}
                       />
                     )}
-                    <span>
+                    <span className="bs-generator-product-name">
                       {row.productTitle ?? "—"}
-                      {row.productType && (
-                        <small style={{ display: "block", color: "#8a8a8a" }}>{row.productType}</small>
-                      )}
+                      {row.productType && <small>{row.productType}</small>}
                     </span>
                   </div>
                 </s-table-cell>
@@ -580,6 +578,7 @@ export default function GeneratorPage() {
           </s-button>
         )}
       </s-section>
+      </main>
 
       {/* Preview modal */}
       <s-modal id={PREVIEW_MODAL_ID} heading="Barcode preview" onHide={() => setPreview(null)}>

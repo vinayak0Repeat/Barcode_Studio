@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import type {
   ActionFunctionArgs,
+  LinksFunction,
   LoaderFunctionArgs,
   MetaFunction,
 } from "react-router";
 import { data, useFetcher, useLoaderData, useRevalidator, useSearchParams } from "react-router";
 import { authenticate } from "../shopify.server";
+import generatorStyles from "../styles/generator-pages.css?url";
 import prisma from "../db.server";
 import { variantRows } from "../services/catalog/search.server";
 import {
@@ -20,6 +22,7 @@ import { isSkuMissing } from "../services/sku/status.shared";
 export const meta: MetaFunction = () => [
   { title: "SKU Generator | Barcode Studio" },
 ];
+export const links: LinksFunction = () => [{ rel: "stylesheet", href: generatorStyles }];
 
 const PAGE_SIZE = 25;
 /** Intentionally disabled (mirrors the Odoo module + barcode parity). */
@@ -232,11 +235,15 @@ export default function SkuGeneratorPage() {
 
   return (
     <s-page heading="SKU Generator">
-      <s-section>
-        <s-paragraph>
+      <main className="bs-generator-layout bs-generator-sku">
+        <header className="bs-generator-page-head">
+          <h1>SKU Generator</h1>
+          <p>
           {loaderData.counts.total} variants · {loaderData.counts.has} with SKU ·{" "}
           {loaderData.counts.missing} missing
-        </s-paragraph>
+          </p>
+        </header>
+      <s-section>
         <s-stack direction="inline" gap="base">
           <s-button
             variant="primary"
@@ -340,25 +347,23 @@ export default function SkuGeneratorPage() {
                   />
                 </s-table-cell>
                 <s-table-cell>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div className="bs-generator-product-cell">
                     {row.imageUrl ? (
                       <img
+                        className="bs-generator-thumbnail"
                         src={row.imageUrl}
                         alt=""
                         loading="lazy"
-                        style={{ width: 32, height: 32, objectFit: "cover", borderRadius: 4 }}
                       />
                     ) : (
                       <span
+                        className="bs-generator-placeholder"
                         aria-hidden="true"
-                        style={{ display: "inline-block", width: 32, height: 32, borderRadius: 4, background: "#f0f0f0" }}
                       />
                     )}
-                    <span>
+                    <span className="bs-generator-product-name">
                       {row.productTitle ?? "—"}
-                      {row.productType && (
-                        <small style={{ display: "block", color: "#8a8a8a" }}>{row.productType}</small>
-                      )}
+                      {row.productType && <small>{row.productType}</small>}
                     </span>
                   </div>
                 </s-table-cell>
@@ -439,6 +444,7 @@ export default function SkuGeneratorPage() {
           </s-button>
         )}
       </s-section>
+      </main>
 
       {/* Generate confirmation modal */}
       <s-modal id={GENERATE_MODAL_ID} heading="Generate SKUs" onHide={() => undefined}>

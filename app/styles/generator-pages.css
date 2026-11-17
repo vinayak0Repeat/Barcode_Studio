@@ -1,0 +1,376 @@
+/* Shared, route-scoped visual system for Barcode and SKU Generator. */
+body:has(s-page .bs-generator-layout),
+s-page:has(.bs-generator-layout) {
+  background: linear-gradient(90deg, var(--bs-bg-from) 0%, var(--bs-bg-mid) 52%, var(--bs-bg-to) 100%);
+}
+
+s-page:has(.bs-generator-layout) {
+  display: block;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: clamp(16px, 1.8vw, 28px) clamp(18px, 2vw, 30px) 44px;
+  box-sizing: border-box;
+}
+
+.bs-generator-layout {
+  display: block;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  margin: 0;
+  padding: 0 0 48px;
+  color: var(--bs-ink);
+  font-family: var(--bs-font);
+}
+
+.bs-generator-layout *,
+.bs-generator-layout *::before,
+.bs-generator-layout *::after { box-sizing: border-box; }
+
+/* Same Shopify s-page canvas breakout as Print Labels. */
+@media (min-width: 901px) {
+  .bs-generator-layout {
+    width: calc(100vw - 72px);
+    margin-left: calc((100% - (100vw - 72px)) / 2);
+  }
+}
+
+.bs-generator-page-head { margin: 0 0 20px; }
+.bs-generator-page-head h1 {
+  margin: 0;
+  color: var(--bs-ink);
+  font-size: clamp(30px, 2.5vw, 36px);
+  font-weight: 450;
+  line-height: 1.12;
+  letter-spacing: -0.8px;
+}
+.bs-generator-page-head p {
+  margin: 7px 0 0;
+  color: var(--bs-ink-soft);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.bs-generator-layout > s-section:nth-of-type(1),
+.bs-generator-layout > s-section:nth-of-type(2) {
+  display: block;
+  min-width: 0;
+  margin: 0 0 14px;
+  padding: 0;
+  color: var(--bs-ink);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  transition: none;
+}
+.bs-generator-layout > s-section:nth-of-type(1):hover,
+.bs-generator-layout > s-section:nth-of-type(2):hover { box-shadow: none; }
+
+.bs-generator-layout > s-section:nth-of-type(1) > s-stack,
+.bs-generator-layout > s-section:nth-of-type(2) > s-stack:first-child {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.bs-generator-layout > s-section:nth-of-type(1) > s-stack + s-stack { margin-top: 12px; }
+.bs-generator-layout > s-section:nth-of-type(1) s-paragraph { margin: 0; }
+.bs-generator-layout > s-section:nth-of-type(2) > s-stack:first-child { margin: 0 0 14px; }
+.bs-generator-layout > s-section:nth-of-type(2) input[type="search"] {
+  flex: 1 1 260px;
+  width: min(100%, 440px);
+  min-width: min(260px, 100%) !important;
+  height: 44px;
+  margin-left: auto;
+  border-radius: 13px;
+}
+.bs-generator-layout > s-section:nth-of-type(2) > s-banner { display: block; margin: 0 0 10px; }
+.bs-generator-layout s-box {
+  display: block;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--bs-accent) 18%, var(--bs-card-solid));
+  border: 1px solid color-mix(in srgb, var(--bs-accent-ink) 14%, transparent);
+  border-radius: 14px;
+}
+.bs-generator-layout s-box > s-stack { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+
+.bs-generator-layout > s-section:nth-of-type(2) s-table {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bs-card-solid);
+  border: 1px solid color-mix(in srgb, var(--bs-ink) 7%, transparent);
+  border-radius: 18px;
+  box-shadow: var(--bs-shadow);
+}
+.bs-generator-layout > s-section:nth-of-type(2) s-table-body { display: block; }
+.bs-generator-layout > s-section:nth-of-type(2) s-table-header-row,
+.bs-generator-layout > s-section:nth-of-type(2) s-table-row {
+  display: grid;
+  grid-template-columns: 34px minmax(170px, 1.35fr) minmax(110px, .9fr) minmax(100px, .85fr) minmax(130px, 1.1fr) 90px 78px 70px minmax(155px, 1.15fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 14px;
+}
+.bs-generator-layout > s-section:nth-of-type(2) s-table-header-row {
+  min-height: 42px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  color: var(--bs-ink-soft);
+  background: color-mix(in srgb, var(--bs-ink) 2%, var(--bs-card-solid));
+  border-bottom: 1px solid var(--bs-line);
+  font-size: 11px;
+  font-weight: 600;
+}
+.bs-generator-layout > s-section:nth-of-type(2) s-table-header,
+.bs-generator-layout > s-section:nth-of-type(2) s-table-cell {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  border: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.bs-generator-layout > s-section:nth-of-type(2) s-table-header { font-size: 11px; }
+.bs-generator-layout > s-section:nth-of-type(2) s-table-header:first-child,
+.bs-generator-layout > s-section:nth-of-type(2) s-table-cell:first-child { text-align: center; }
+.bs-generator-layout > s-section:nth-of-type(2) s-table-row {
+  min-height: 66px;
+  color: var(--bs-ink);
+  background: transparent;
+  border-bottom: 1px solid var(--bs-line);
+  transition: background-color .15s ease;
+}
+.bs-generator-layout > s-section:nth-of-type(2) s-table-row:last-child { border-bottom: 0; }
+.bs-generator-layout > s-section:nth-of-type(2) s-table-row:hover {
+  background: color-mix(in srgb, var(--bs-ink) 2.5%, var(--bs-card-solid));
+}
+.bs-generator-layout > s-section:nth-of-type(2) s-table-row:has(input[type="checkbox"]:checked) {
+  background: color-mix(in srgb, var(--bs-accent) 24%, var(--bs-card-solid));
+}
+.bs-generator-layout > s-section:nth-of-type(2) s-table-row:has(s-table-cell:only-child) {
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 76px;
+  padding: 18px;
+}
+.bs-generator-layout > s-section:nth-of-type(2) s-table-row:has(s-table-cell:only-child) s-table-cell { text-align: center; }
+.bs-generator-layout > s-section:nth-of-type(2) s-table-cell input[type="checkbox"],
+.bs-generator-layout > s-section:nth-of-type(2) s-table-header input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+.bs-generator-product-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.bs-generator-thumbnail,
+.bs-generator-placeholder {
+  display: block;
+  flex: 0 0 42px;
+  width: 42px !important;
+  height: 42px !important;
+  object-fit: cover;
+  border-radius: 10px !important;
+  background: color-mix(in srgb, var(--bs-ink) 5%, var(--bs-card-solid));
+}
+.bs-generator-placeholder { border: 1px solid var(--bs-line); }
+.bs-generator-product-name { display: block; min-width: 0; font-weight: 600; }
+.bs-generator-product-name small { display: block; margin-top: 3px; color: var(--bs-ink-soft); font-size: 11px; font-weight: 400; }
+.bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(3) { color: var(--bs-ink-soft); }
+.bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(4) > span,
+.bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(5) > span { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
+.bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(6) s-badge { white-space: nowrap; }
+.bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(9) s-stack { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.bs-generator-layout > s-section:nth-of-type(2) s-table-row > s-table-cell > s-stack { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.bs-generator-layout > s-section:nth-of-type(2) s-table-row > s-table-cell:nth-child(n + 7) { font-variant-numeric: tabular-nums; }
+.bs-generator-layout > s-section:nth-of-type(2) > s-stack:not(:first-child) { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+
+@media (max-width: 1100px) and (min-width: 901px) {
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-header-row,
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-row {
+    grid-template-columns: 26px minmax(112px, 1.2fr) minmax(74px, .85fr) minmax(70px, .8fr) minmax(100px, 1fr) 70px 56px 50px minmax(110px, 1fr);
+    gap: 6px;
+    padding-inline: 8px;
+  }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell,
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-header { font-size: 11px; }
+}
+
+@media (max-width: 900px) {
+  s-page:has(.bs-generator-layout) { padding: clamp(16px, 2vw, 24px) clamp(16px, 2.4vw, 28px) 36px; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-header-row { display: none; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-row {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px 10px;
+    padding: 12px;
+  }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:first-child { grid-column: 1; grid-row: 1 / span 4; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(2) { grid-column: 2; grid-row: 1; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(3) { grid-column: 2 / 4; grid-row: 2; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(4) { grid-column: 2; grid-row: 3; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(5) { grid-column: 3; grid-row: 3; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(6) { grid-column: 3; grid-row: 1; justify-self: end; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(7) { grid-column: 2; grid-row: 4; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(8) { grid-column: 3; grid-row: 4; justify-self: end; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(9) { grid-column: 2 / 4; grid-row: 5; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(n + 3):nth-child(-n + 8)::before {
+    display: block;
+    margin-bottom: 2px;
+    color: var(--bs-ink-soft);
+    font-size: 9px;
+    line-height: 1.2;
+  }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(3)::before { content: "Variant"; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(4)::before { content: "SKU"; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(5)::before { content: "Barcode"; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(6)::before { content: "Status"; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(7)::before { content: "Price"; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(8)::before { content: "Stock"; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(9) s-stack { justify-content: flex-end; }
+}
+
+@media (max-width: 600px) {
+  s-page:has(.bs-generator-layout) { padding: 14px 12px 32px; }
+  .bs-generator-page-head { margin-bottom: 14px; }
+  .bs-generator-page-head h1 { font-size: 25px; }
+  .bs-generator-layout > s-section:nth-of-type(1) > s-stack,
+  .bs-generator-layout > s-section:nth-of-type(2) > s-stack:first-child { gap: 7px; }
+  .bs-generator-layout > s-section:nth-of-type(2) input[type="search"] { flex-basis: 100%; width: 100%; margin-left: 0; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-row { grid-template-columns: 22px minmax(0, 1fr) auto; gap: 6px 8px; padding: 11px 9px; }
+  .bs-generator-thumbnail,
+  .bs-generator-placeholder { flex-basis: 38px; width: 38px !important; height: 38px !important; }
+  .bs-generator-layout > s-section:nth-of-type(2) s-table-cell:nth-child(9) s-button { font-size: 11px; }
+}
+
+/* Barcode and SKU Generator tables: shared header and row grid at every viewport. */
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table {
+  display: block !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  width: 100% !important;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+}
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-header-row,
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-body {
+  grid-column: 1 / -1 !important;
+  width: 100% !important;
+  margin: 0 !important;
+}
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-header-row,
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-row {
+  display: grid !important;
+  grid-template-columns: 40px minmax(220px, 2fr) minmax(110px, 1fr) minmax(100px, 1fr) minmax(150px, 1.4fr) 110px 90px 70px auto !important;
+  align-items: center !important;
+  gap: 10px;
+  width: 100% !important;
+  min-width: 1120px;
+  box-sizing: border-box;
+}
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-header-row {
+  display: grid !important;
+  position: static !important;
+  inset-block-start: auto !important;
+  z-index: auto !important;
+  min-height: 48px;
+  padding: 8px 14px;
+  background: color-mix(in srgb, var(--bs-ink) 2%, var(--bs-card-solid));
+  border-bottom: 1px solid var(--bs-line);
+}
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-body { display: block !important; }
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-row {
+  position: static !important;
+  height: 64px;
+  min-height: 64px;
+  padding: 8px 14px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--bs-line);
+  box-shadow: none;
+}
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-row:last-child { border-bottom: 0; }
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-header,
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-cell {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-header:first-child,
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-cell:first-child {
+  justify-content: center;
+}
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-cell:nth-child(2),
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-cell:nth-child(3),
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-cell:nth-child(4),
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-cell:nth-child(5) {
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) .bs-generator-product-cell,
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) .bs-generator-product-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) .bs-generator-product-name small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-header:nth-child(7),
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-header:nth-child(8),
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-cell:nth-child(7),
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-cell:nth-child(8) {
+  justify-content: flex-end;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-cell:nth-child(6) s-badge {
+  white-space: nowrap;
+}
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-cell:nth-child(9) {
+  overflow: visible;
+}
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-cell:nth-child(9) > s-stack {
+  display: inline-flex !important;
+  flex: 0 0 auto;
+  flex-flow: row nowrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  white-space: nowrap;
+}
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-cell:nth-child(9) s-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-row:has(s-table-cell:only-child) {
+  grid-template-columns: minmax(0, 1fr) !important;
+  min-width: 0;
+  height: auto;
+  min-height: 64px;
+}
+
+@media (max-width: 900px) {
+  :is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-header-row { display: grid !important; }
+  :is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-row { display: grid !important; }
+  :is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-cell {
+    grid-column: auto !important;
+    grid-row: auto !important;
+    justify-self: stretch !important;
+  }
+}
