@@ -29,24 +29,21 @@
 .bs-segment-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bs-segment-pct { font-variant-numeric: tabular-nums; }
 
-/* ----- bento grid ----- */
+/* ----- card grid: 3 per row on desktop, tidy 3x3 -----
+   Arrangement (>=1100px):
+     Row 1: Coverage ring | Labels printed (spans 2)
+     Row 2: Variants by status | Today | Attention needed
+     Row 3: Recent activity | Recent print jobs | Catalog sync + write
+   Equal 16px gaps; rows stretch so cards in a row share equal height. */
 .bs-bento {
-  display: grid; gap: 15px;
-  grid-auto-rows: minmax(120px, auto);
-  grid-template-columns: repeat(12, 1fr);
-  grid-template-areas:
-    "ring ring ring overtime overtime overtime overtime status status status summary summary"
-    "attention attention attention updates updates updates jobs jobs sync sync sync sync";
+  display: grid; gap: 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
 }
-.bs-bento-ring { grid-area: ring; }
-.bs-bento-overtime { grid-area: overtime; }
-.bs-bento-status { grid-area: status; }
-.bs-bento-summary { grid-area: summary; }
-.bs-bento-attention { grid-area: attention; }
-.bs-bento-updates { grid-area: updates; }
-.bs-bento-jobs { grid-area: jobs; }
-.bs-bento-sync { grid-area: sync; }
-.bs-bento .bs-bento-sync:has(+ .bs-banner) { margin-bottom: 4px; }
+.bs-bento > .bs-card { height: 100%; }
+.bs-bento-overtime { grid-column: span 2; }
+/* conditional sync-failed banner stretches across the row */
+.bs-bento > div:has(> s-banner) { grid-column: 1 / -1; }
 
 .bs-card-title {
   display: flex; align-items: baseline; justify-content: space-between;
@@ -146,13 +143,13 @@ a.bs-card-sub:hover { text-decoration: underline; }
   padding: 9px 10px; cursor: pointer; text-align: left; text-decoration: none;
   transition: background 0.15s ease;
 }
-.bs-attention-row:hover { background: rgba(255, 255, 255, 0.06); }
+.bs-attention-row:hover { background: color-mix(in srgb, var(--bs-on-charcoal) 6%, transparent); }
 .bs-attention-chip {
   width: 34px; height: 34px; border-radius: 50%; display: flex;
   align-items: center; justify-content: center; font-size: 13px; flex: 0 0 auto;
 }
-.bs-attention-chip-red { background: rgba(229, 100, 91, 0.18); color: #ff9d94; }
-.bs-attention-chip-amber { background: rgba(255, 213, 74, 0.16); color: var(--bs-accent); }
+.bs-attention-chip-red { background: color-mix(in srgb, var(--bs-danger) 18%, transparent); color: var(--bs-danger); }
+.bs-attention-chip-amber { background: color-mix(in srgb, var(--bs-accent) 16%, transparent); color: var(--bs-accent); }
 .bs-attention-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
 .bs-attention-label {
   font-size: 13px; font-weight: 600; color: var(--bs-on-charcoal);
@@ -203,7 +200,7 @@ a.bs-card-sub:hover { text-decoration: underline; }
 
 /* ----- sync/write footer ----- */
 .bs-footer {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 18px;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px;
 }
 .bs-footer-section { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .bs-footer-title { display: flex; align-items: center; gap: 10px; }
@@ -214,28 +211,27 @@ a.bs-card-sub:hover { text-decoration: underline; }
 
 /* ----- sparkline / chart sizing -----
    Fixed heights (not min-height): an SVG with a 1:1 viewBox and width:100%
-   otherwise becomes a square as tall as it is wide. */
+   otherwise becomes a square as tall as it is wide. Sizes tuned for 3-across
+   cards (~1/3 of the content width). */
 .bs-sparkline { height: 34px; }
-.bs-chart { height: 120px; }
-.bs-chart-sm { height: 84px; }
+.bs-chart { height: 110px; }
+.bs-chart-sm { height: 80px; }
+/* ring + rows + numbers shrink gracefully inside 1/3-width cards */
+.bs-bento .bs-ring-box { width: min(170px, 72%); }
+.bs-bento .bs-ring-value { font-size: 32px; }
+.bs-bento .bs-status-row { grid-template-columns: 88px minmax(0, 1fr) 30px 44px; }
+.bs-bento .bs-header-numbers { gap: 22px; }
+.bs-bento .bs-big-number-value { font-size: 36px; }
+.bs-bento .bs-ot-total { font-size: 32px; }
+.bs-bento .bs-bars { min-height: 120px; gap: 6px; }
 
-/* ----- responsive (reference breakpoints mapped to our widths) ----- */
-@media (max-width: 1400px) {
-  .bs-bento {
-    grid-template-columns: repeat(6, 1fr);
-    grid-template-areas:
-      "ring ring ring overtime overtime overtime"
-      "status status status summary summary summary"
-      "attention attention attention updates updates updates"
-      "jobs jobs jobs sync sync sync";
-  }
+/* ----- responsive (3 / 2 / 1 columns) ----- */
+@media (max-width: 1099px) and (min-width: 700px) {
+  .bs-bento { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: row dense; }
 }
-@media (max-width: 900px) {
-  .bs-bento {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "attention" "ring" "summary" "overtime" "status" "jobs" "updates" "sync";
-  }
+@media (max-width: 699px) {
+  .bs-bento { grid-template-columns: minmax(0, 1fr); }
+  .bs-bento-overtime { grid-column: auto; }
   .bs-footer { grid-template-columns: 1fr; }
   .bs-title { font-size: 30px; }
   .bs-big-number-value { font-size: 34px; }

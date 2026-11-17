@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "8e008e51a8f5454c555a62c8b46188c0"
-name = "Barcode Studio Staging"
+name = "Barcode Studio"
 application_url = "https://barcodestudio-production.up.railway.app"
 embedded = true
 
@@ -16,5 +16,4 @@ redirect_urls = [ "https://barcodestudio-production.up.railway.app/api/auth" ]
 api_version = "2027-01"
 
 [build]
-include_config_on_deploy = true
 automatically_update_urls_on_dev = false

@@ -1181,15 +1181,18 @@ export default function PrintLabelsPage() {
       <header className="bs-print-header">
         <div className="bs-print-toolbar-head">
           <div className="bs-print-heading"><h1>Print Labels</h1><p>{selected.size} selected, {totalLabels} labels</p></div>
-          <input
-            className="bs-print-search"
-            type="search"
-            aria-label="Search products, variants, SKU or barcode"
-            placeholder="Search products, variants, SKU or barcode"
-            value={searchInput}
-            onChange={(event) => setSearchInput(event.target.value)}
-            onKeyDown={(event) => { if (event.key === "Enter") searchNow(); }}
-          />
+          <div className="bs-print-search-wrap">
+            <svg className="bs-print-search-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M8.5 3a5.5 5.5 0 1 0 3.4 9.8l3.6 3.6 1.4-1.4-3.6-3.6A5.5 5.5 0 0 0 8.5 3Zm0 2a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Z" fill="currentColor"/></svg>
+            <input
+              className="bs-print-search"
+              type="search"
+              aria-label="Search products, variants, SKU or barcode"
+              placeholder="Search products, variants, SKU or barcode"
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter") searchNow(); }}
+            />
+          </div>
         </div>
         <div className="bs-print-toolbar-controls">
           <div className="bs-print-toolbar-row bs-print-toolbar-filters">
@@ -1203,7 +1206,8 @@ export default function PrintLabelsPage() {
           </div>
           <div className="bs-print-toolbar-row bs-print-toolbar-actions">
           <s-button
-            variant="primary"
+            variant="secondary"
+            icon="barcode"
             onClick={() => showModal(GENERATE_MODAL_ID)}
             accessibilityLabel="Generate barcodes for the selected variants without one"
             {...(busy || generateState.disabled ? { disabled: true } : {})}
@@ -1211,11 +1215,11 @@ export default function PrintLabelsPage() {
             Generate Barcode{generateState.labelSuffix}
           </s-button>
           <span className="bs-disabled-tooltip" title="Coming soon (Step 5)"><s-button variant="tertiary" disabled accessibilityLabel="Generate SKU — coming soon in Step 5">Generate SKU</s-button></span>
-          <s-button variant="tertiary" onClick={() => void selectAllProducts()} {...(loadingMore || selectingAll || busy ? { disabled: true } : {})}>Select All Products</s-button>
-          <label className="bs-print-control bs-quantity-control"><select aria-label="Quantity mode" value={mode} onChange={(event) => setMode(event.target.value as QuantityMode)}><option value="stock">Use Stock Qty</option><option value="fixed">Fixed</option></select></label>
-          <details className="bs-clear-qty"><summary>Clear Qty</summary><div className="bs-clear-qty-menu"><button type="button" onClick={() => clearQty("reset")}>Reset to 1</button><button type="button" onClick={() => clearQty("zero")}>Set to 0</button></div></details>
+          <s-button variant="secondary" icon="checkbox" onClick={() => void selectAllProducts()} {...(loadingMore || selectingAll || busy ? { disabled: true } : {})}>Select All Products</s-button>
+          <label className="bs-print-control bs-quantity-control"><s-icon type="inventory" size="small" aria-hidden="true"></s-icon><select aria-label="Quantity mode" value={mode} onChange={(event) => setMode(event.target.value as QuantityMode)}><option value="stock">Use Stock Qty</option><option value="fixed">Fixed</option></select></label>
+          <details className="bs-clear-qty"><summary><s-icon type="broom" size="small" aria-hidden="true"></s-icon>Clear Qty</summary><div className="bs-clear-qty-menu"><button type="button" onClick={() => clearQty("reset")}>Reset to 1</button><button type="button" onClick={() => clearQty("zero")}>Set to 0</button></div></details>
           <s-button variant="primary" onClick={() => submitPrint("print")} {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true } : {})}>Print</s-button>
-          <s-button variant="tertiary" onClick={() => submitPrint("pdf")} {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true, loading: busy } : {})}>{busy ? "Preparing PDF…" : "Save PDF"}</s-button>
+          <s-button variant="secondary" icon="download" onClick={() => submitPrint("pdf")} {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true, loading: busy } : {})}>{busy ? "Preparing PDF…" : "Save PDF"}</s-button>
           <s-link href="/app/generator">Generator</s-link>
           </div>
         </div>
@@ -1261,10 +1265,10 @@ export default function PrintLabelsPage() {
               onChange={() => parentCheckbox(product)}
               onPrefetch={() => void ensureVariantsLoaded([product.gid])}
             />
-            <button className="bs-product-expand" type="button" aria-label={`${expanded.has(product.gid) ? "Collapse" : "Expand"} ${product.title ?? "product"}`} onMouseEnter={() => void ensureVariantsLoaded([product.gid])} onFocus={() => void ensureVariantsLoaded([product.gid])} onClick={() => expandProduct(product.gid)}>{expanded.has(product.gid) ? "▾" : "▸"}</button>
-            {product.imageUrl ? <img src={product.imageUrl} alt="" loading="lazy" /> : <span className="bs-product-placeholder" />}
+            <button className="bs-product-expand" type="button" aria-label={`${expanded.has(product.gid) ? "Collapse" : "Expand"} ${product.title ?? "product"}`} onMouseEnter={() => void ensureVariantsLoaded([product.gid])} onFocus={() => void ensureVariantsLoaded([product.gid])} onClick={() => expandProduct(product.gid)}>▸</button>
+            {product.imageUrl ? <img src={product.imageUrl} alt="" loading="lazy" /> : <span className="bs-product-placeholder"><s-icon type="image" size="small" aria-hidden="true"></s-icon></span>}
             <div className="bs-product-meta"><b title={product.title ?? "Product"}>{product.title ?? "—"}</b><span className="bs-muted">{product.productType || "Product"} · {product.variantCount} variants · {product.withBarcode} barcoded</span></div>
-            <span className={product.stockSum < 0 ? "bs-negative" : "bs-muted"}>Stock {product.stockSum}</span>
+            <span className={product.stockSum <= 0 ? "bs-negative" : "bs-muted"}>Stock {product.stockSum}</span>
             <span className="bs-product-status"><s-badge tone={productStatus === "Ready" ? "success" : productStatus === "Missing" ? "caution" : "critical"}>{productStatus}</s-badge></span>
             <s-button variant="tertiary" onClick={() => expandProduct(product.gid)}>{expanded.has(product.gid) ? "Collapse" : "Expand"}</s-button>
           </div>
@@ -1371,7 +1375,7 @@ export default function PrintLabelsPage() {
       <aside className="bs-preview-panel">
         <h2>Preview</h2>
         <p className="bs-preview-subtitle">{previewTemplate?.name ?? "Template"} ({previewSize?.name ?? "Label size"})</p>
-        {shouldShowPreviewEmptyState(selected.size) ? <p className="bs-preview-empty">Select variants to see the live label preview.</p> : <>
+        {shouldShowPreviewEmptyState(selected.size) ? <p className="bs-preview-empty"><s-icon type="image" size="small" aria-hidden="true"></s-icon>Select variants to see the live label preview.</p> : <>
           <p className="bs-muted">{selected.size} selected · {totalLabels} label copies{missingSelectedNoteCount > 0 && <> · {missingSelectedNoteCount} selected without barcode (not printed)</>}</p>
           {previewNotes.noBarcode.length > 0 && <div className="bs-preview-missing-list">
             {previewNotes.noBarcode.map((note) => <p className="bs-preview-note" key={`${note.gid}-${note.kind}`}>{note.text}</p>)}
@@ -1433,6 +1437,7 @@ export default function PrintLabelsPage() {
           </strong>
           <s-button
             variant="primary"
+            icon="print"
             onClick={() => submitPrint("print")}
             {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0
               ? { disabled: true, loading: busy }
@@ -1441,7 +1446,8 @@ export default function PrintLabelsPage() {
             {busy ? "Preparing print job…" : "Print labels"}
           </s-button>
           <s-button
-            variant="tertiary"
+            variant="secondary"
+            icon="download"
             onClick={() => submitPrint("pdf")}
             {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true, loading: busy } : {})}
           >
