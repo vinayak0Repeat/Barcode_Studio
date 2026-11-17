@@ -317,3 +317,4 @@ export function layoutJob(job: LayoutJobSnapshot): LayoutDocument {
   }
   return { pages, sheetMode: "grid", warnings: [...warningSet], labels: labels.length, pageCount: pages.length };
 }
+

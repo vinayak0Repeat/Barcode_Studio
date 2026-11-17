@@ -197,8 +197,11 @@ export function parentCheckboxState(args: {
   /** Selectable (barcoded) variant gids when the product's variants are loaded. */
   selectableGids: readonly string[] | null;
   productBySelectedGid: ReadonlyMap<string, string>;
+  /** A click has selected this product while its variants are still loading. */
+  optimisticallySelected?: boolean;
 }): ParentCheckboxState {
-  const { selected, productGid, selectableGids, productBySelectedGid } = args;
+  const { selected, productGid, selectableGids, productBySelectedGid, optimisticallySelected } = args;
+  if (optimisticallySelected) return { checked: true, indeterminate: false };
   if (selectableGids && selectableGids.length > 0) {
     let selectedCount = 0;
     for (const gid of selectableGids) {

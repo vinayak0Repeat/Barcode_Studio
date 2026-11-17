@@ -1,0 +1,122 @@
+/* =====================================================================
+   App-wide skin (Phase 3): applies the reference look to every screen.
+   Tokens + shared classes live in theme.css; this file themes the shell
+   (s-page sections, tables, banners) using ONLY those variables. Polaris
+   controls keep their behavior; we only set surface/ink colors where the
+   custom elements inherit them.
+   ===================================================================== */
+
+/* Wrap every admin page in the reference gradient. Two layers:
+   1) the IFRAME BODY carries the gradient so it covers the FULL document
+      height (including below shorter pages and while scrolling) — s-page's
+      own min-height:100vh stops at the viewport and left a white gap.
+   2) s-page keeps the same gradient + padding as the shell.
+   Scoped with :has(s-page) so the standalone print/PDF/preview documents
+   (which render no s-page) keep their white, un-themed appearance. */
+body:has(s-page) {
+  margin: 0;
+  min-height: 100vh;
+  background: linear-gradient(
+    135deg, var(--bs-bg-from) 0%, var(--bs-bg-mid) 55%, var(--bs-bg-to) 100%);
+  background-color: var(--bs-bg-mid);
+}
+
+s-page {
+  display: block;
+  color: var(--bs-ink);
+  font-family: var(--bs-font);
+  background: linear-gradient(
+    135deg, var(--bs-bg-from) 0%, var(--bs-bg-mid) 55%, var(--bs-bg-to) 100%);
+  min-height: 100vh;
+  padding: 26px 30px 44px;
+  box-sizing: border-box;
+}
+@media (max-width: 900px) { s-page { padding: 20px 20px 36px; } }
+@media (max-width: 480px) { s-page { padding: 14px 14px 32px; } }
+
+s-page :focus-visible { outline: var(--bs-focus); outline-offset: 2px; }
+
+/* page headings (light-weight display type like the reference title) */
+s-page > s-page-header,
+s-page h1 {
+  font-family: var(--bs-font);
+}
+
+/* sections as bento cards */
+s-page s-section {
+  display: block;
+  background: var(--bs-card-solid);
+  background: var(--bs-card);
+  border: 1px solid var(--bs-line);
+  border-radius: var(--bs-radius);
+  box-shadow: var(--bs-shadow);
+  padding: 20px 22px;
+  margin: 0 0 15px 0;
+  color: var(--bs-ink);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+s-page s-section:hover { box-shadow: var(--bs-shadow-hover); }
+
+s-page s-section h2,
+s-page s-section h3 {
+  font-size: 16px; font-weight: 500; color: var(--bs-ink);
+}
+s-page s-paragraph { color: var(--bs-ink); font-size: 14px; }
+s-page s-text { color: var(--bs-ink); }
+s-page s-text[color="subdued"] { color: var(--bs-ink-soft); }
+s-page s-heading { color: var(--bs-ink); font-weight: 500; }
+
+/* muted helper reused across pages */
+.bs-muted { color: var(--bs-ink-soft); }
+.bs-negative { color: var(--bs-danger); font-weight: 600; }
+
+/* tables inside s-section: keep the Polaris table but soften it */
+s-page s-table {
+  border: 1px solid var(--bs-line);
+  border-radius: var(--bs-radius-md);
+  overflow: hidden;
+  background: var(--bs-card-solid);
+}
+s-page s-table-header,
+s-page s-table-cell {
+  font-size: 13px;
+  border-bottom: 1px solid var(--bs-line);
+}
+s-page s-table-header {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px;
+  color: var(--bs-ink-soft); font-weight: 600;
+}
+s-page s-table-row:nth-child(even) { background: var(--bs-hover-wash); }
+
+/* native form controls on themed pages */
+s-page input[type="text"],
+s-page input[type="search"],
+s-page input[type="number"],
+s-page select {
+  border: 1px solid var(--bs-line);
+  background: var(--bs-card-solid);
+  color: var(--bs-ink);
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+s-page input:focus-visible,
+s-page select:focus-visible {
+  outline: var(--bs-focus); outline-offset: 1px;
+}
+s-page input[type="checkbox"] { accent-color: var(--bs-accent-ink); }
+s-page input[type="search"] { border-radius: 999px; padding: 8px 16px; }
+
+/* links in themed ink */
+s-page a { color: inherit; }
+
+/* old compat aliases kept working (used by generator/sku/history pages) */
+.bs-kpi { min-height: 120px; }
+.bs-kpi span { font-size: 11.5px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; color: var(--bs-ink-soft); }
+.bs-kpi strong { font: var(--bs-display); letter-spacing: -1px; margin-top: 4px; }
+.bs-kpi em {
+  font-style: normal; font-size: 11px; color: var(--bs-success); font-weight: 600;
+}
+.bs-accent-warning strong { color: var(--bs-accent-ink); }
+.bs-accent-critical strong { color: var(--bs-danger); }

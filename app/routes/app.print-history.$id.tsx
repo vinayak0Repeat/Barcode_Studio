@@ -1,15 +1,17 @@
-import { useEffect, useRef } from "react";
 import type {
   ActionFunctionArgs,
   LoaderFunctionArgs,
   MetaFunction,
 } from "react-router";
-import { data, useFetcher, useLoaderData } from "react-router";
+import { data, redirect, useFetcher, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { pdfUrlFor, printUrlFor } from "../services/labels/printToken.server";
 import { outputUrlForKind } from "../services/printHistory.shared";
 import { issueReprintUrls } from "../services/reprint.server";
+import { SIGNED_OUTPUT_ANCHOR_PROPS } from "../services/labels/outputAnchor.shared";
+import { PrintTargetFormButton } from "../components/PrintTargetFormButton";
+import { printWindowErrorResponse } from "../services/labels/printWindowError.server";
 const formatUtc = (date: Date) => new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", dateStyle: "medium", timeStyle: "short" }).format(date);
 
 export const meta: MetaFunction = () => [
@@ -103,47 +105,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const form = await request.formData();
   const jobId = String(form.get("jobId") ?? "");
+  const openWindow = form.get("openWindow") === "true";
 
   const result = await issueReprintUrls(session.shop, jobId, prisma, { print: printUrlFor, pdf: pdfUrlFor });
   if (!result.ok) {
-    return data({ ok: false as const, message: "Print job not found." }, { status: 404 });
+    return openWindow
+      ? printWindowErrorResponse("Print job not found.", 404)
+      : data({ ok: false as const, message: "Print job not found." }, { status: 404 });
   }
+  if (openWindow) return redirect(result.printUrl, { status: 303 });
   return data(result);
 };
 
 export default function PrintJobDetailPage() {
   const loaderData = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
-  const outputWindowRef = useRef<Window | null>(null);
-
-  useEffect(() => {
-    if (fetcher.state !== "idle" || !fetcher.data) return;
-    const kind = String(
-      (fetcher.formData as FormData | null | undefined)?.get("kind") ?? "print",
-    );
-    const win = outputWindowRef.current;
-    if (fetcher.data.ok) {
-      const url = outputUrlForKind(kind === "pdf" ? "pdf" : "print", fetcher.data);
-      if (url) {
-        if (win && !win.closed) {
-          win.location.href = url;
-        } else {
-          window.open(url, "_blank");
-        }
-      }
-    } else if (win && !win.closed) {
-      win.close();
-    }
-    outputWindowRef.current = null;
-  }, [fetcher.state, fetcher.data, fetcher.formData]);
 
   const requestOutput = (kind: "print" | "pdf") => {
-    outputWindowRef.current = window.open("", "_blank");
-    if (outputWindowRef.current) {
-      outputWindowRef.current.document.write(
-        `<!doctype html><html><head><title>Preparing ${kind}…</title></head><body style="font-family:sans-serif;padding:24px">Preparing…</body></html>`,
-      );
-    }
     const form = new FormData();
     form.set("jobId", loaderData.job.id);
     form.set("kind", kind);
@@ -177,15 +155,11 @@ export default function PrintJobDetailPage() {
           </s-list-item>
         </s-unordered-list>
         <s-stack direction="inline" gap="base">
-          <s-button
-            variant="primary"
-            onClick={() => requestOutput("print")}
-            {...(fetcher.state !== "idle" ? { loading: true } : {})}
-          >
+          <PrintTargetFormButton action={`/app/print-history/${job.id}`} jobId={job.id} variant="primary">
             Reprint
-          </s-button>
-          <s-button variant="secondary" onClick={() => requestOutput("pdf")}>
-            Save PDF
+          </PrintTargetFormButton>
+          <s-button variant="secondary" onClick={() => requestOutput("pdf")} {...(fetcher.state !== "idle" ? { loading: true, disabled: true } : {})}>
+            {fetcher.state !== "idle" ? "Preparing PDF…" : "Open PDF"}
           </s-button>
           <s-link href={`/app/print-labels?job=${job.id}`}>Open in Print Labels</s-link>
           <s-link href="/app/print-history">Back to Print History</s-link>
@@ -233,6 +207,14 @@ export default function PrintJobDetailPage() {
             ))}
           </s-unordered-list>
         </s-section>
+      )}
+
+      {fetcher.data?.ok && (
+        <s-banner tone="success">
+          PDF ready: {" "}
+          <a href={fetcher.data.pdfUrl} {...SIGNED_OUTPUT_ANCHOR_PROPS}>Open PDF</a>
+          {" "}<s-link href="/app/print-history">Print History</s-link>
+        </s-banner>
       )}
     </s-page>
   );

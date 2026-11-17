@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { LoaderFunctionArgs, MetaFunction } from "react-router";
+import type { LinksFunction, LoaderFunctionArgs, MetaFunction } from "react-router";
 import { useLoaderData } from "react-router";
 import prisma from "../db.server";
 import { printTokenMatchesJob, verifyPrintToken } from "../services/labels/printToken.server";
@@ -7,8 +7,9 @@ import { layoutJob, readLayoutSnapshot } from "../services/labels/layout.server"
 import { renderPrintLayoutHtml } from "../services/labels/renderer.server";
 import { formatPrice } from "../services/labels/formatPrice";
 import { markOutputOpened } from "../services/printHistoryState.server";
+import { printPageLinks, printPageMeta } from "../services/labels/printPageMeta.shared";
 
-export const meta: MetaFunction = () => [{ title: "Print labels | Barcode Studio" }];
+export const links: LinksFunction = () => printPageLinks();
 
 export const loader = async ({ params, request }: LoaderFunctionArgs) => {
   const jobId = params.jobId ?? "";
@@ -39,17 +40,25 @@ export const loader = async ({ params, request }: LoaderFunctionArgs) => {
   };
 };
 
+export const meta: MetaFunction<typeof loader> = ({ data }) =>
+  printPageMeta(data && "jobName" in data ? data.jobName ?? null : null);
+
+function closePrintContext() {
+  try {
+    window.close();
+  } catch {
+    // Browsers may refuse to close a context that was not script-opened.
+  }
+}
+
 export default function PrintJobPage() {
   const page = useLoaderData<typeof loader>();
   const printContent = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if ("linkExpired" in page || !printContent.current) return;
+  const schedulePrint = () => {
     let secondFrame = 0;
     const firstFrame = window.requestAnimationFrame(() => {
       secondFrame = window.requestAnimationFrame(() => {
-        // Effects run after React commits dangerouslySetInnerHTML; the frame
-        // boundary lets Edge paint the inline SVG bars before opening preview.
         const svgNodes = printContent.current?.querySelectorAll("svg");
         if (!printContent.current || [...(svgNodes ?? [])].some((svg) => !svg.isConnected)) return;
         window.print();
@@ -58,6 +67,16 @@ export default function PrintJobPage() {
     return () => {
       window.cancelAnimationFrame(firstFrame);
       if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  };
+
+  useEffect(() => {
+    if ("linkExpired" in page || !printContent.current) return;
+    window.addEventListener("afterprint", closePrintContext);
+    const cancelPrint = schedulePrint();
+    return () => {
+      cancelPrint();
+      window.removeEventListener("afterprint", closePrintContext);
     };
   }, [page]);
 
@@ -71,5 +90,13 @@ export default function PrintJobPage() {
     );
   }
 
-  return <div ref={printContent} data-job-name={page.jobName} dangerouslySetInnerHTML={{ __html: page.html }} />;
+  return (
+    <>
+      <style>{`.print-window-controls{display:flex;gap:8px;padding:12px;font:14px sans-serif}.print-window-controls button{padding:8px 12px}@media print{.print-window-controls{display:none}}`}</style>
+      <div className="print-window-controls">
+        <button type="button" onClick={closePrintContext}>Close window</button>
+      </div>
+      <div ref={printContent} data-job-name={page.jobName} dangerouslySetInnerHTML={{ __html: page.html }} />
+    </>
+  );
 }

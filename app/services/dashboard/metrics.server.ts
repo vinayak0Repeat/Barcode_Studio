@@ -13,6 +13,58 @@ export interface DashboardMetrics {
   labelsThisMonth: number;
 }
 
+export interface DaySeriesPoint {
+  /** ISO date (YYYY-MM-DD) of the UTC day. */
+  day: string;
+  labelCount: number;
+}
+
+/** Pure: build a zero-filled day series from grouped rows (unit tested). */
+export function buildDaySeries(
+  days: number,
+  rows: Array<{ day: string; labelCount: number }>,
+  now: Date,
+): DaySeriesPoint[] {
+  const byDay = new Map(rows.map((row) => [row.day, Number(row.labelCount)]));
+  const series: DaySeriesPoint[] = [];
+  for (let offset = days - 1; offset >= 0; offset--) {
+    const date = new Date(now.getTime() - offset * 24 * 60 * 60 * 1000);
+    const day = date.toISOString().slice(0, 10);
+    series.push({ day, labelCount: byDay.get(day) ?? 0 });
+  }
+  return series;
+}
+
+/**
+ * Labels printed per day for the last `days` days (default 14), ONE grouped
+ * query, zero-filled by buildDaySeries (the pure part is unit tested).
+ * Read-only.
+ */
+export async function labelsPerDay(
+  shopId: string,
+  days = 14,
+  now: Date = new Date(),
+): Promise<DaySeriesPoint[]> {
+  const since = new Date(now.getTime() - (days - 1) * 24 * 60 * 60 * 1000);
+  since.setUTCHours(0, 0, 0, 0);
+  const rows = await prisma.$queryRaw<
+    Array<{ day: string; labelCount: bigint | number }>
+  >`
+    SELECT to_char("printedAt", 'YYYY-MM-DD') AS "day", SUM("labelCount") AS "labelCount"
+    FROM "PrintJob"
+    WHERE "shopId" = ${shopId}
+      AND "state" <> 'failed'
+      AND "printedAt" >= ${since}
+    GROUP BY 1
+    ORDER BY 1
+  `;
+  return buildDaySeries(
+    days,
+    rows.map((row) => ({ day: String(row.day), labelCount: Number(row.labelCount) })),
+    now,
+  );
+}
+
 export interface UtcPeriods {
   todayStart: Date;
   tomorrowStart: Date;

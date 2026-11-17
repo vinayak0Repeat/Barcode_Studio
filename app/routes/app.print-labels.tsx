@@ -47,6 +47,7 @@ import { buildPreviewEntries, buildPreviewNotes, countPrintableLabels, previewPa
 import { diffRestoreLines } from "../services/printHistory.shared";
 import { createPrintedActivity } from "../services/printJobActivity.server";
 import { barcodeEditFailure } from "../services/labels/barcodeEdit.shared";
+import { openPrintWindow } from "../services/labels/openPrintWindow.shared";
 
 export const meta: MetaFunction = () => [
   { title: "Print Labels | Barcode Studio" },
@@ -242,13 +243,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
+  const failPrint = (message: string, status = 400, extra: { skipped?: ActionResult["skipped"] } = {}) =>
+    data({ ok: false, message, ...extra } as ActionResult, { status });
+
   if (intent !== "print") {
     return data({ ok: false, message: "Unknown intent." } as ActionResult, { status: 400 });
   }
 
   const selection = form.getAll("gids").map(String).filter(Boolean);
   if (selection.length === 0) {
-    return data({ ok: false, message: "No variants selected." } as ActionResult, { status: 400 });
+    return failPrint("No variants selected.");
   }
 
   const mode = (String(form.get("mode") ?? "fixed")) as QuantityMode;
@@ -257,19 +261,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const templateId = String(form.get("templateId") ?? "");
   const sheetMode = String(form.get("sheetMode") ?? "roll") === "grid" ? "grid" : "roll";
   const requested: Record<string, number> = {};
-  for (const entry of form.getAll("qty")) {
-    const serialized = String(entry);
+  const quantityEntries = form.getAll("qty").map(String);
+  for (const serialized of quantityEntries) {
     const separator = serialized.lastIndexOf("=");
     if (separator < 1) {
-      return data({ ok: false, message: "A selected quantity is malformed." } as ActionResult, { status: 400 });
+      return failPrint("A selected quantity is malformed.");
     }
     const gid = serialized.slice(0, separator);
     const value = Number(serialized.slice(separator + 1));
     if (!Number.isInteger(value) || value < 0 || value > DEFAULT_CAP_PER_VARIANT) {
-      return data({
-        ok: false,
-        message: `Quantity for ${gid} must be a whole number from 0 to ${DEFAULT_CAP_PER_VARIANT}.`,
-      } as ActionResult, { status: 400 });
+      return failPrint(`Quantity for ${gid} must be a whole number from 0 to ${DEFAULT_CAP_PER_VARIANT}.`);
     }
     requested[gid] = value;
   }
@@ -293,19 +294,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     getBarcodeConfig(session.shop),
   ]);
   if (!size) {
-    return data({ ok: false, message: "Choose a label size that exists for this shop." } as ActionResult, { status: 400 });
+    return failPrint("Choose a label size that exists for this shop.");
   }
   if (!template) {
-    return data({ ok: false, message: "Choose a label template that exists for this shop." } as ActionResult, { status: 400 });
+    return failPrint("Choose a label template that exists for this shop.");
   }
   if (!Number.isFinite(size.widthMm) || !Number.isFinite(size.heightMm) || size.widthMm <= 0 || size.heightMm <= 0) {
-    return data({ ok: false, message: "The selected label size must have positive width and height." } as ActionResult, { status: 400 });
+    return failPrint("The selected label size must have positive width and height.");
   }
   const products = await prisma.cachedProduct.findMany({
     where: { shopId: session.shop, gid: { in: cacheRows.map((r) => r.productGid) } },
     select: { gid: true, title: true },
   });
   const titleByGid = new Map(products.map((p) => [p.gid, p.title]));
+  const submittedToggles = {
+    showProductTitle: String(form.get("showProductTitle") ?? "false") === "true",
+    showVariantTitle: String(form.get("showVariantTitle") ?? "false") === "true",
+    showSku: String(form.get("showSku") ?? "false") === "true",
+    showPrice: String(form.get("showPrice") ?? "false") === "true",
+    showBarcodeText: String(form.get("showBarcodeText") ?? "false") === "true",
+  };
 
   const plan = buildPrintPlan(
     cacheRows.map((row) => ({
@@ -325,24 +333,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       sizeId,
       templateId,
       sheetMode,
-      toggles: Object.fromEntries([
-        ["showProductTitle", "showProductTitle"], ["showVariantTitle", "showVariantTitle"],
-        ["showSku", "showSku"], ["showPrice", "showPrice"], ["showBarcodeText", "showBarcodeText"],
-      ].map(([key, field]) => [key, String(form.get(field) ?? "false") === "true"])) as {
-        showProductTitle: boolean; showVariantTitle: boolean; showSku: boolean; showPrice: boolean; showBarcodeText: boolean;
-      },
+      toggles: submittedToggles,
     },
     { type: (template.barcodeType || config.type) as typeof config.type, length: config.length },
   );
 
   if (plan.exceedsTotalCap) {
-    return data(
-      {
-        ok: false,
-        message: `Too many labels (${plan.labelCount}). The hard cap is ${DEFAULT_TOTAL_CAP} labels per job.`,
-      } as ActionResult,
-      { status: 400 },
-    );
+    return failPrint(`Too many labels (${plan.labelCount}). The hard cap is ${DEFAULT_TOTAL_CAP} labels per job.`);
   }
   if (plan.lines.length === 0) {
     return data(
@@ -381,13 +378,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         showPrice: template?.showPrice ?? false,
         showBarcodeText: template?.showBarcodeText ?? true,
         variantTitles: Object.fromEntries(cacheRows.map((row) => [row.gid, row.title])),
-        toggles: {
-          showProductTitle: String(form.get("showProductTitle") ?? template?.showProductName ?? "true") === "true",
-          showVariantTitle: String(form.get("showVariantTitle") ?? template?.showVariantName ?? "true") === "true",
-          showSku: String(form.get("showSku") ?? template?.showSku ?? "true") === "true",
-          showPrice: String(form.get("showPrice") ?? template?.showPrice ?? "false") === "true",
-          showBarcodeText: String(form.get("showBarcodeText") ?? template?.showBarcodeText ?? "true") === "true",
-        },
+        toggles: submittedToggles,
       },
       sizeSnap: {
         sizeId: size?.id ?? null,
@@ -491,6 +482,7 @@ function hideModal(id: string) {
 export default function PrintLabelsPage() {
   const loaderData = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
+  const printWindowRef = useRef<Window | null>(null);
 
   // ----- product list (P1 item 2: append pagination) -----
   const [products, setProducts] = useState<PrintLabelProduct[]>(
@@ -542,8 +534,6 @@ export default function PrintLabelsPage() {
 
   // ----- banners / result -----
   const [result, setResult] = useState<ActionResult | null>(null);
-  const [popupBlocked, setPopupBlocked] = useState(false);
-  const printWindowRef = useRef<Window | null>(null);
   const busy = fetcher.state !== "idle";
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -964,12 +954,19 @@ export default function PrintLabelsPage() {
       productGid: product.gid,
       selectableGids,
       productBySelectedGid,
+      optimisticallySelected: pendingProducts.has(product.gid),
     });
 
     if (state.checked || state.indeterminate) {
       // UNTICK: remove exactly this product's selected variants now.
       const token = (parentLoadTokens.current.get(product.gid) ?? 0) + 1;
       parentLoadTokens.current.set(product.gid, token);
+      setPendingProducts((prev) => {
+        if (!prev.has(product.gid)) return prev;
+        const next = new Set(prev);
+        next.delete(product.gid);
+        return next;
+      });
       const { removedGids } = untickProductSelection(
         selected,
         product.gid,
@@ -982,6 +979,12 @@ export default function PrintLabelsPage() {
     if (cached) {
       const token = (parentLoadTokens.current.get(product.gid) ?? 0) + 1;
       parentLoadTokens.current.set(product.gid, token);
+      setPendingProducts((prev) => {
+        if (!prev.has(product.gid)) return prev;
+        const next = new Set(prev);
+        next.delete(product.gid);
+        return next;
+      });
       tickVariants(cached);
       return;
     }
@@ -1053,19 +1056,12 @@ export default function PrintLabelsPage() {
   useEffect(() => {
     if (fetcher.state !== "idle" || !fetcher.data) return;
     setResult(fetcher.data);
-
-    const printWindow = printWindowRef.current;
-    const destination = fetcher.data.outputFormat === "pdf"
-      ? fetcher.data.pdfUrl
-      : fetcher.data.printUrl;
+    const destination = fetcher.data.outputFormat === "pdf" ? fetcher.data.pdfUrl : fetcher.data.printUrl;
     if (fetcher.data.ok && destination) {
-      if (printWindow && !printWindow.closed) {
-        printWindow.location.href = destination;
-      } else {
-        setPopupBlocked(true);
-      }
-    } else if (printWindow && !printWindow.closed) {
-      printWindow.close();
+      const printWindow = printWindowRef.current;
+      if (printWindow && !printWindow.closed) printWindow.location.href = destination;
+    } else if (printWindowRef.current && !printWindowRef.current.closed) {
+      printWindowRef.current.close();
     }
     printWindowRef.current = null;
   }, [fetcher.state, fetcher.data]);
@@ -1136,11 +1132,23 @@ export default function PrintLabelsPage() {
   }, [fetcher.state, fetcher.data, mode]);
 
   const submitPrint = (outputFormat: "print" | "pdf") => {
-    printWindowRef.current = window.open("", "_blank");
-    if (printWindowRef.current) {
-      printWindowRef.current.document.write(
-        "<!doctype html><html><head><title>Preparing labels…</title></head><body style=\"font-family:sans-serif;padding:24px\">Preparing labels…</body></html>",
-      );
+    setResult(null);
+    printWindowRef.current = openPrintWindow(outputFormat);
+    if (outputFormat === "print") {
+      const form = new FormData();
+      form.set("intent", "print");
+      form.set("outputFormat", outputFormat);
+      for (const [gid, qty] of selected) {
+        form.append("gids", gid);
+        form.append("qty", `${gid}=${qty}`);
+      }
+      form.set("mode", mode);
+      form.set("sizeId", sizeId);
+      form.set("templateId", templateId);
+      form.set("sheetMode", sheetMode);
+      for (const [key, value] of Object.entries(toggles)) form.set(key, String(value));
+      fetcher.submit(form, { method: "POST" });
+      return;
     }
     const form = new FormData();
     form.set("intent", "print");
@@ -1166,8 +1174,6 @@ export default function PrintLabelsPage() {
     for (const gid of missing) form.append("gids", gid);
     fetcher.submit(form, { method: "POST" });
   };
-
-  const openPrint = (url: string) => window.open(url, "_blank");
 
   return (
     <s-page heading="Print Labels">
@@ -1209,7 +1215,7 @@ export default function PrintLabelsPage() {
           <label className="bs-print-control bs-quantity-control"><select aria-label="Quantity mode" value={mode} onChange={(event) => setMode(event.target.value as QuantityMode)}><option value="stock">Use Stock Qty</option><option value="fixed">Fixed</option></select></label>
           <details className="bs-clear-qty"><summary>Clear Qty</summary><div className="bs-clear-qty-menu"><button type="button" onClick={() => clearQty("reset")}>Reset to 1</button><button type="button" onClick={() => clearQty("zero")}>Set to 0</button></div></details>
           <s-button variant="primary" onClick={() => submitPrint("print")} {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true } : {})}>Print</s-button>
-          <s-button variant="tertiary" onClick={() => submitPrint("pdf")} {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true } : {})}>Save PDF</s-button>
+          <s-button variant="tertiary" onClick={() => submitPrint("pdf")} {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true, loading: busy } : {})}>{busy ? "Preparing PDF…" : "Save PDF"}</s-button>
           <s-link href="/app/generator">Generator</s-link>
           </div>
         </div>
@@ -1242,6 +1248,7 @@ export default function PrintLabelsPage() {
               ? productCachedVariants.filter((variant) => variant.barcode).map((variant) => variant.gid)
               : null,
             productBySelectedGid,
+            optimisticallySelected: pendingProducts.has(product.gid),
           });
           return <Fragment key={product.gid}>
           <div className="bs-product-card" id={`product-${product.gid}`}>
@@ -1249,7 +1256,7 @@ export default function PrintLabelsPage() {
               label={`Select all variants of ${product.title ?? "product"}`}
               checked={parentState.checked}
               indeterminate={parentState.indeterminate}
-              disabled={product.withBarcode === 0 || loadingVariantsFor.has(cacheKeyFor(product.gid)) || pendingProducts.has(product.gid)}
+              disabled={product.withBarcode === 0}
               pending={pendingProducts.has(product.gid)}
               onChange={() => parentCheckbox(product)}
               onPrefetch={() => void ensureVariantsLoaded([product.gid])}
@@ -1407,11 +1414,8 @@ export default function PrintLabelsPage() {
               Skipped: {result.skipped.map((row) => `${titleForVariant(variantByGid.get(row.variantGid))} (${row.reason})`).join(", ")}
             </s-paragraph>
           )}
-          {result.jobId && result.printUrl && (
+          {result.jobId && (
             <s-stack direction="inline" gap="base">
-              <s-button variant="tertiary" onClick={() => openPrint(result.outputFormat === "pdf" ? result.pdfUrl! : result.printUrl!)}>
-                {result.outputFormat === "pdf" ? "Open PDF" : "Open print page"}
-              </s-button>
               <s-link href="/app/print-history">Print History</s-link>
             </s-stack>
           )}
@@ -1420,15 +1424,6 @@ export default function PrintLabelsPage() {
           </s-button>
         </s-banner>
       )}
-      {popupBlocked && result?.printUrl && (
-        <s-banner tone="warning">
-          The new tab was blocked by the browser.{" "}
-          <s-link href={result.outputFormat === "pdf" ? result.pdfUrl : result.printUrl}>
-            {result.outputFormat === "pdf" ? "Open the PDF" : "Open the print page"}
-          </s-link>
-        </s-banner>
-      )}
-
       {/* Sticky bottom bar */}
       {selected.size > 0 && (
         <div className="bs-sticky-printbar">
@@ -1440,17 +1435,17 @@ export default function PrintLabelsPage() {
             variant="primary"
             onClick={() => submitPrint("print")}
             {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0
-              ? { disabled: true }
+              ? { disabled: true, loading: busy }
               : {})}
           >
-            Print labels
+            {busy ? "Preparing print job…" : "Print labels"}
           </s-button>
           <s-button
             variant="tertiary"
             onClick={() => submitPrint("pdf")}
-            {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true } : {})}
+            {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true, loading: busy } : {})}
           >
-            Save PDF
+            {busy ? "Preparing PDF…" : "Save PDF"}
           </s-button>
           <s-button variant="tertiary" onClick={() => {
             setSelected(new Map());

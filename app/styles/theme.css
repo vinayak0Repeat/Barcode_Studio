@@ -1,0 +1,387 @@
+/* =====================================================================
+   Barcode Studio — theme tokens + shared component classes.
+   Ported from the order_management reference dashboard (warm bento).
+   ALL colors live here as --bs-* variables; component files use only
+   the variables. Light + dark (prefers-color-scheme + Shopify admin
+   color-scheme where detectable). Label previews / print page stay
+   un-themed (always white, black bars).
+   ===================================================================== */
+
+:root {
+  /* page gradient */
+  --bs-bg-from: #ecebe8;
+  --bs-bg-mid: #f7f3e6;
+  --bs-bg-to: #fbefc0;
+
+  /* surfaces */
+  --bs-card: rgba(255, 255, 255, 0.68);
+  --bs-card-solid: #fdfcf8;
+  --bs-line: rgba(0, 0, 0, 0.06);
+  --bs-line-strong: rgba(0, 0, 0, 0.14);
+  --bs-hover-wash: rgba(0, 0, 0, 0.035);
+  --bs-track: rgba(0, 0, 0, 0.05);
+
+  /* ink */
+  --bs-ink: #1f1f1f;
+  --bs-ink-soft: #7a7a72;
+  --bs-charcoal: #2b2b2b;
+  --bs-on-charcoal: #fbfaf6;
+  --bs-on-charcoal-soft: #a6a397;
+
+  /* semantic */
+  --bs-accent: #ffd54a;
+  --bs-accent-ink: #b98a00;
+  --bs-danger: #e5645b;
+  --bs-success: #5bbf8a;
+  --bs-info: #7a9cc7;
+  --bs-bar-base: #d8d3c4;
+  --bs-soft-chip: #e8e5dc;
+
+  /* hatch pattern (status pills / bars) */
+  --bs-hatch: repeating-linear-gradient(
+    135deg, rgba(0, 0, 0, 0.14) 0 1.5px, transparent 1.5px 7px);
+
+  /* elevation + geometry */
+  --bs-shadow: 0 8px 30px rgba(0, 0, 0, 0.04);
+  --bs-shadow-hover: 0 14px 38px rgba(0, 0, 0, 0.07);
+  --bs-radius: 28px;
+  --bs-radius-md: 16px;
+  --bs-radius-sm: 12px;
+  --bs-focus: 2px solid #b98a00;
+
+  /* type scale */
+  --bs-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --bs-display-xl: 300 58px/1.05 var(--bs-font);
+  --bs-display: 300 40px/1.05 var(--bs-font);
+  --bs-display-sm: 300 32px/1.05 var(--bs-font);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bs-bg-from: #191918;
+    --bs-bg-mid: #1f1e1a;
+    --bs-bg-to: #262215;
+    --bs-card: rgba(38, 37, 32, 0.85);
+    --bs-card-solid: #24231f;
+    --bs-line: rgba(255, 255, 255, 0.08);
+    --bs-line-strong: rgba(255, 255, 255, 0.16);
+    --bs-hover-wash: rgba(255, 255, 255, 0.06);
+    --bs-track: rgba(255, 255, 255, 0.08);
+    --bs-ink: #efece4;
+    --bs-ink-soft: #a6a397;
+    --bs-bar-base: #4a463c;
+    --bs-soft-chip: #3a382f;
+    --bs-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+    --bs-shadow-hover: 0 14px 38px rgba(0, 0, 0, 0.35);
+  }
+}
+
+/* Shopify admin dark scheme mirrors prefers-color-scheme in practice;
+   this attribute selector covers hosts that only set the meta scheme. */
+[color-scheme="dark"] {
+  /* same block as above via CSS duplication */
+  --bs-bg-from: #191918;
+  --bs-bg-mid: #1f1e1a;
+  --bs-bg-to: #262215;
+  --bs-card: rgba(38, 37, 32, 0.85);
+  --bs-card-solid: #24231f;
+  --bs-line: rgba(255, 255, 255, 0.08);
+  --bs-line-strong: rgba(255, 255, 255, 0.16);
+  --bs-hover-wash: rgba(255, 255, 255, 0.06);
+  --bs-track: rgba(255, 255, 255, 0.08);
+  --bs-ink: #efece4;
+  --bs-ink-soft: #a6a397;
+  --bs-bar-base: #4a463c;
+  --bs-soft-chip: #3a382f;
+  --bs-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+  --bs-shadow-hover: 0 14px 38px rgba(0, 0, 0, 0.35);
+}
+
+/* ---------------------------------------------------------------------
+   Page shell
+   --------------------------------------------------------------------- */
+
+/* .bs-app is the inner wrapper of pages rendered inside s-page (which owns
+   the shell: padding + gradient via app-skin.css). Typography/colors only —
+   a second background/padding here would double-pad the dashboard. */
+.bs-app {
+  color: var(--bs-ink);
+  font-family: var(--bs-font);
+  font-size: 14px;
+}
+
+.bs-app :focus-visible {
+  outline: var(--bs-focus);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------
+   Cards
+   --------------------------------------------------------------------- */
+
+.bs-card {
+  background: var(--bs-card-solid);
+  background: var(--bs-card);
+  border: 1px solid var(--bs-line);
+  border-radius: var(--bs-radius);
+  box-shadow: var(--bs-shadow);
+  padding: 24px 26px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  color: var(--bs-ink);
+}
+
+a.bs-card, button.bs-card { text-decoration: none; cursor: pointer; }
+.bs-card:not(.bs-card-static):hover {
+  transform: translateY(-2px);
+  box-shadow: var(--bs-shadow-hover);
+}
+
+/* dark anchor card with a stacked card peeking behind */
+.bs-card-dark {
+  position: relative;
+  background: var(--bs-charcoal);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+.bs-card-dark::before {
+  content: "";
+  position: absolute;
+  inset: 10px -8px -10px 8px;
+  border-radius: var(--bs-radius);
+  background: rgba(255, 255, 255, 0.05);
+  z-index: 0;
+  pointer-events: none;
+}
+.bs-card-dark > * { position: relative; z-index: 1; }
+.bs-card-dark, .bs-card-dark h1, .bs-card-dark h2, .bs-card-dark h3 {
+  color: var(--bs-on-charcoal);
+}
+
+/* stat card: icon chip + label + big number + delta + optional sparkline */
+.bs-stat-card { gap: 6px; }
+.bs-stat-chip {
+  width: 34px; height: 34px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; margin-bottom: 8px;
+  background: var(--bs-soft-chip); color: var(--bs-ink-soft);
+}
+.bs-stat-chip-accent { background: rgba(255, 213, 74, 0.16); color: var(--bs-accent-ink); }
+.bs-stat-chip-danger { background: rgba(229, 100, 91, 0.16); color: var(--bs-danger); }
+.bs-stat-chip-success { background: rgba(91, 191, 138, 0.16); color: var(--bs-success); }
+.bs-stat-label {
+  font-size: 11.5px; font-weight: 600; letter-spacing: 0.4px;
+  text-transform: uppercase; color: var(--bs-ink-soft);
+}
+.bs-stat-value {
+  font: var(--bs-display);
+  font-variant-numeric: tabular-nums; letter-spacing: -1px;
+}
+.bs-stat-sub { font-size: 12.5px; color: var(--bs-ink-soft); }
+
+/* delta badge */
+.bs-delta {
+  display: inline-flex; align-items: center; gap: 4px;
+  border-radius: 999px; padding: 3px 10px;
+  font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.bs-delta-up { background: rgba(91, 191, 138, 0.16); color: #3d8f66; }
+.bs-delta-down { background: rgba(229, 100, 91, 0.16); color: var(--bs-danger); }
+.bs-delta-flat { background: var(--bs-track); color: var(--bs-ink-soft); }
+@media (prefers-color-scheme: dark) {
+  .bs-delta-up { color: var(--bs-success); }
+}
+
+/* ---------------------------------------------------------------------
+   Pills / badges / dots
+   --------------------------------------------------------------------- */
+
+.bs-pill {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: none; border-radius: 999px; padding: 9px 12px;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  text-decoration: none; transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.bs-pill:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(0, 0, 0, 0.1); }
+.bs-pill-yellow { background: var(--bs-accent); color: var(--bs-charcoal); }
+.bs-pill-dark { background: var(--bs-charcoal); color: var(--bs-on-charcoal); }
+.bs-pill-hatch { background: var(--bs-hatch), #f4f1e7; color: var(--bs-ink); }
+.bs-pill-outline {
+  background: transparent; border: 1.5px solid var(--bs-line-strong);
+  color: var(--bs-ink-soft);
+}
+.bs-pill-soft { background: var(--bs-soft-chip); color: var(--bs-ink-soft); }
+
+.bs-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid var(--bs-line); background: var(--bs-card-solid);
+  border-radius: 999px; padding: 5px 13px; font-size: 12.5px; font-weight: 500;
+  color: var(--bs-ink); cursor: pointer; transition: all 0.15s ease;
+  text-decoration: none;
+}
+.bs-chip:hover { border-color: var(--bs-line-strong); }
+.bs-chip-active { font-weight: 600; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.04); border-color: var(--bs-line-strong); }
+
+.bs-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.bs-dot-ready { background: var(--bs-success); }
+.bs-dot-missing { background: var(--bs-accent); }
+.bs-dot-duplicate { background: var(--bs-danger); }
+.bs-dot-ink { background: var(--bs-ink-soft); }
+
+/* count pill (tabular) */
+.bs-count-pill {
+  background: var(--bs-track); border-radius: 999px; padding: 3px 11px;
+  font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+  color: var(--bs-ink);
+}
+
+/* ---------------------------------------------------------------------
+   Buttons (plain HTML, theme-skinned; Polaris s-button stays for forms)
+   --------------------------------------------------------------------- */
+
+.bs-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  border-radius: 999px; padding: 8px 18px; font-size: 13px; font-weight: 600;
+  cursor: pointer; border: 1px solid transparent; text-decoration: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  font-family: inherit;
+}
+.bs-btn:hover { transform: translateY(-1px); }
+.bs-btn:disabled { opacity: 0.6; cursor: default; transform: none; }
+.bs-btn-primary {
+  background: linear-gradient(135deg, #3a3a38 0%, var(--bs-charcoal) 100%);
+  color: var(--bs-on-charcoal);
+}
+.bs-btn-accent { background: var(--bs-accent); color: var(--bs-charcoal); }
+.bs-btn-secondary {
+  background: var(--bs-card-solid); border-color: var(--bs-line); color: var(--bs-ink);
+}
+.bs-btn-ghost { background: transparent; color: var(--bs-ink-soft); }
+.bs-btn-ghost:hover { color: var(--bs-ink); }
+.bs-btn-danger { background: var(--bs-danger); color: #fff; }
+
+/* ---------------------------------------------------------------------
+   Toolbar / filter bar / tabs
+   --------------------------------------------------------------------- */
+
+.bs-toolbar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  background: var(--bs-card-solid); background: var(--bs-card);
+  border: 1px solid var(--bs-line); border-radius: 22px;
+  box-shadow: var(--bs-shadow); padding: 12px 18px; margin-bottom: 16px;
+}
+
+.bs-tabs {
+  display: inline-flex; background: var(--bs-track);
+  border-radius: 999px; padding: 3px; gap: 2px; flex-wrap: wrap;
+}
+.bs-tab {
+  border: none; background: transparent; border-radius: 999px;
+  padding: 5px 12px; font-size: 12.5px; font-weight: 500;
+  color: var(--bs-ink-soft); cursor: pointer; transition: all 0.15s ease;
+  font-family: inherit;
+}
+.bs-tab:hover { color: var(--bs-ink); }
+.bs-tab-active {
+  background: var(--bs-card-solid); color: var(--bs-ink);
+  font-weight: 600; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+/* ---------------------------------------------------------------------
+   Table (rounded container, sticky header, zebra, hover)
+   --------------------------------------------------------------------- */
+
+.bs-table-wrap {
+  border: 1px solid var(--bs-line); border-radius: var(--bs-radius-md);
+  overflow: auto; background: var(--bs-card-solid); box-shadow: var(--bs-shadow);
+}
+table.bs-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.bs-table th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--bs-card-solid);
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.4px; color: var(--bs-ink-soft);
+  text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--bs-line);
+}
+.bs-table td {
+  padding: 10px 14px; border-bottom: 1px solid var(--bs-line);
+  color: var(--bs-ink); vertical-align: middle;
+}
+.bs-table tbody tr:nth-child(even) { background: var(--bs-hover-wash); }
+.bs-table tbody tr:hover { background: var(--bs-hover-wash); }
+.bs-table tbody tr:last-child td { border-bottom: none; }
+.bs-num { font-variant-numeric: tabular-nums; text-align: right; }
+
+/* status rows with track bars (orders_by_status pattern) */
+.bs-status-rows { display: flex; flex-direction: column; gap: 2px; }
+.bs-status-row {
+  display: grid; grid-template-columns: 108px 1fr 34px 48px;
+  align-items: center; gap: 10px; border-radius: var(--bs-radius-sm);
+  padding: 6px 8px; transition: background 0.15s ease;
+}
+.bs-status-row:hover { background: var(--bs-hover-wash); }
+.bs-status-track {
+  height: 12px; border-radius: 999px; background: var(--bs-track); overflow: hidden;
+}
+.bs-status-bar {
+  display: block; height: 100%; border-radius: 999px;
+  transform-origin: left center; animation: bs-grow 0.5s ease both;
+}
+@keyframes bs-grow { from { transform: scaleX(0); } }
+
+/* ---------------------------------------------------------------------
+   Empty / skeleton / progress
+   --------------------------------------------------------------------- */
+
+.bs-empty {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 8px; flex: 1; min-height: 140px;
+  text-align: center; padding: 12px; color: var(--bs-ink-soft);
+}
+.bs-empty-icon { font-size: 28px; color: #c8c4b8; }
+.bs-empty-title { font-size: 14px; font-weight: 600; color: var(--bs-ink); max-width: 280px; }
+.bs-empty-note { font-size: 12.5px; color: var(--bs-ink-soft); max-width: 280px; margin: 0; }
+
+.bs-skeleton {
+  background: linear-gradient(90deg,
+    rgba(0, 0, 0, 0.05) 25%, rgba(0, 0, 0, 0.08) 37%,
+    rgba(0, 0, 0, 0.05) 63%);
+  background-size: 400% 100%;
+  animation: bs-shimmer 1.3s ease infinite;
+  border-radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  .bs-skeleton {
+    background: linear-gradient(90deg,
+      rgba(255, 255, 255, 0.05) 25%, rgba(255, 255, 255, 0.09) 37%,
+      rgba(255, 255, 255, 0.05) 63%);
+    background-size: 400% 100%;
+  }
+}
+@keyframes bs-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+.bs-progress {
+  height: 12px; border-radius: 999px; background: var(--bs-track);
+  overflow: hidden; flex: 1; min-width: 120px;
+}
+.bs-progress > span {
+  display: block; height: 100%; border-radius: 999px;
+  background: var(--bs-success);
+  transform-origin: left center; animation: bs-grow 0.5s ease both;
+}
+
+/* muted text helper */
+.bs-muted { color: var(--bs-ink-soft); }
+.bs-num { font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bs-app *, .bs-app *::before, .bs-app *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

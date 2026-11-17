@@ -23,8 +23,8 @@ export const loader = async ({ params, request }: LoaderFunctionArgs) => {
     sizeSnap: job.sizeSnap,
   });
   const pdf = await renderJobPdfCached(job.id, () => layoutJob(snapshot));
-  const bytes = Buffer.from(pdf.bytes);
   await markOutputOpened(verification.shop, job.id, prisma);
+  const bytes = Buffer.from(pdf.bytes);
   return new Response(bytes, {
     status: 200,
     headers: {

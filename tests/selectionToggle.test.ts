@@ -86,6 +86,19 @@ describe("parentCheckboxState (derived, controlled)", () => {
     ).toEqual({ checked: false, indeterminate: false });
   });
 
+  it("shows an unloaded product checked immediately while its tick is pending", () => {
+    const { selected, productBySelectedGid } = fixture();
+    expect(
+      parentCheckboxState({
+        selected,
+        productGid: "P4",
+        selectableGids: null,
+        productBySelectedGid,
+        optimisticallySelected: true,
+      }),
+    ).toEqual({ checked: true, indeterminate: false });
+  });
+
   it("product with zero selectable variants: unchecked, never indeterminate", () => {
     const { selected, productBySelectedGid } = fixture();
     expect(

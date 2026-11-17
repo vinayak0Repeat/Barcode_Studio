@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   ActionFunctionArgs,
   LoaderFunctionArgs,
@@ -17,6 +17,7 @@ import {
 } from "../services/printHistory.shared";
 import { dayMonthBoundaries } from "../services/time/timezone.shared";
 import { issueReprintUrls } from "../services/reprint.server";
+import { openPrintWindow } from "../services/labels/openPrintWindow.shared";
 
 export const meta: MetaFunction = () => [
   { title: "Print History | Barcode Studio" },
@@ -175,7 +176,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const form = await request.formData();
   const jobId = String(form.get("jobId") ?? "");
-
   const result = await issueReprintUrls(session.shop, jobId, prisma, { print: printUrlFor, pdf: pdfUrlFor });
   if (!result.ok) {
     return data({ ok: false as const, message: "Print job not found." }, { status: 404 });
@@ -189,38 +189,26 @@ export default function PrintHistoryPage() {
   const fetcher = useFetcher<typeof action>();
   const [searchParams, setSearchParams] = useSearchParams();
   const outputWindowRef = useRef<Window | null>(null);
+  const outputKindRef = useRef<"print" | "pdf">("print");
   const result = fetcher.data ?? null;
 
-  // Open the output tab synchronously on click (popup blocker), then
-  // navigate it when the fresh URL arrives — same pattern as Print Labels.
   useEffect(() => {
     if (fetcher.state !== "idle" || !fetcher.data) return;
-    const kind = String(
-      (fetcher.formData as FormData | null | undefined)?.get("kind") ?? "print",
-    );
-    const win = outputWindowRef.current;
+    const kind = outputKindRef.current;
+    const outputWindow = outputWindowRef.current;
     if (fetcher.data.ok) {
       const url = outputUrlForKind(kind === "pdf" ? "pdf" : "print", fetcher.data);
-      if (url) {
-        if (win && !win.closed) {
-          win.location.href = url;
-        } else {
-          window.open(url, "_blank"); // popup was blocked — fallback
-        }
-      }
-    } else if (win && !win.closed) {
-      win.close();
+      if (url && outputWindow && !outputWindow.closed) outputWindow.location.href = url;
+    } else if (outputWindow && !outputWindow.closed) {
+      outputWindow.close();
     }
     outputWindowRef.current = null;
+    outputKindRef.current = "print";
   }, [fetcher.state, fetcher.data, fetcher.formData]);
 
   const requestOutput = (jobId: string, kind: "print" | "pdf") => {
-    outputWindowRef.current = window.open("", "_blank");
-    if (outputWindowRef.current) {
-      outputWindowRef.current.document.write(
-        `<!doctype html><html><head><title>Preparing ${kind}…</title></head><body style="font-family:sans-serif;padding:24px">Preparing…</body></html>`,
-      );
-    }
+    outputKindRef.current = kind;
+    outputWindowRef.current = openPrintWindow(kind);
     const form = new FormData();
     form.set("jobId", jobId);
     form.set("kind", kind);
@@ -257,6 +245,12 @@ export default function PrintHistoryPage() {
             Activity
           </s-button>
         </s-stack>
+
+        {result?.ok && (
+          <s-banner tone="success">
+            Output ready. <s-link href="/app/print-history">Print History</s-link>
+          </s-banner>
+        )}
 
         {isJobs ? (
           <>
@@ -357,19 +351,15 @@ export default function PrintHistoryPage() {
                       <s-table-cell>
                         <s-stack direction="inline" gap="base">
                           <s-link href={`/app/print-history/${job.id}`}>View</s-link>
-                          <s-button
-                            variant="tertiary"
-                            onClick={() => requestOutput(job.id, "print")}
-                            {...(fetcher.state !== "idle" ? { loading: true } : {})}
-                          >
-                            Reprint
+                          <s-button variant="tertiary" onClick={() => requestOutput(job.id, "print")} {...(fetcher.state !== "idle" ? { loading: true, disabled: true } : {})}>
+                            {fetcher.state !== "idle" ? "Preparing print…" : "Reprint"}
                           </s-button>
                           <s-button
                             variant="tertiary"
                             onClick={() => requestOutput(job.id, "pdf")}
-                            {...(fetcher.state !== "idle" ? { loading: true } : {})}
+                            {...(fetcher.state !== "idle" ? { loading: true, disabled: true } : {})}
                           >
-                            Save PDF
+                            {fetcher.state !== "idle" ? "Preparing PDF…" : "Open PDF"}
                           </s-button>
                         </s-stack>
                       </s-table-cell>

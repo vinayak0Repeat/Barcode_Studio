@@ -1,95 +1,247 @@
-.bs-dashboard {
-  --bs-surface: var(--s-color-bg, #fff);
-  --bs-muted: var(--s-color-text-subdued, #687076);
-  --bs-border: var(--s-color-border, #dfe3e8);
-  --bs-text: var(--s-color-text, #202223);
-  --bs-green: #16804a;
-  --bs-orange: #b45b00;
-  --bs-red: #c43232;
-  display: grid;
-  gap: 16px;
-  color: var(--bs-text);
-  padding: 8px 0 20px;
-  font-family: var(--s-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
-}
+/* =====================================================================
+   Dashboard — bento layout on top of theme.css tokens (reference:
+   order_management dashboard.scss + bento.scss). Only variables from
+   theme.css; no hardcoded colors.
+   ===================================================================== */
 
+.bs-dashboard { display: block; }
 .bs-dashboard * { box-sizing: border-box; }
-.bs-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 2px 2px 4px; }
-.bs-header h1 { margin: 0; font-size: clamp(23px, 3vw, 30px); line-height: 1.2; font-weight: 680; letter-spacing: -.02em; }
-.bs-header p { margin: 4px 0 0; color: var(--bs-muted); font-size: 14px; }
-.bs-card { background: var(--bs-surface); border: 1px solid var(--bs-border); border-radius: 12px; box-shadow: 0 2px 8px rgb(0 0 0 / 5%); padding: 16px; min-width: 0; }
-.bs-health { padding: 18px 20px 13px; }
-.bs-health-top { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 18px 28px; }
-.bs-health-main { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px; min-width: 0; }
-.bs-health h2, .bs-panel h2, .bs-footer h2 { margin: 0; font-size: 16px; font-weight: 650; }
-.bs-health-items { display: flex; align-items: center; flex-wrap: wrap; gap: 9px 18px; font-size: 13px; }
-.bs-health-items > span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.bs-health-items b { font-variant-numeric: tabular-nums; }
-.bs-dot { width: 10px; height: 10px; flex: 0 0 10px; border-radius: 50%; background: currentColor; }
-.bs-dot-ready { color: var(--bs-green); }.bs-dot-missing { color: var(--bs-orange); }.bs-dot-duplicate { color: var(--bs-red); }
-.bs-progress-wrap { display: flex; align-items: center; gap: 10px; width: min(280px, 100%); font-size: 14px; font-variant-numeric: tabular-nums; }
-.bs-progress { height: 8px; flex: 1; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, var(--bs-green) 15%, var(--bs-surface)); }
-.bs-progress span { display: block; height: 100%; border-radius: inherit; background: var(--bs-green); transition: width .25s ease; }
-.bs-footnote { margin: 10px 0 0; color: var(--bs-muted); font-size: 11px; }
-.bs-stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
-.bs-stat { display: flex; flex-direction: column; gap: 8px; min-height: 88px; justify-content: center; }
-.bs-stat span, .bs-kpi > span { font-size: 13px; color: var(--bs-muted); }
-.bs-stat strong, .bs-kpi strong { font-size: 29px; line-height: 1.1; font-weight: 680; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-.bs-kpi-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
-.bs-kpi { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-height: 112px; color: inherit; text-decoration: none; transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease; }
-.bs-kpi:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--bs-text) 28%, var(--bs-border)); box-shadow: 0 5px 14px rgb(0 0 0 / 9%); }
-.bs-kpi:focus-visible, .bs-job-list a:focus-visible, .bs-panel-heading a:focus-visible { outline: 3px solid #458fff; outline-offset: 2px; }
-.bs-kpi em { color: var(--bs-green); font-size: 12px; font-style: normal; font-weight: 600; }
-.bs-kpi small { color: var(--bs-muted); font-size: 11px; }
-.bs-accent-warning { border-left: 4px solid var(--bs-orange); }.bs-accent-critical { border-left: 4px solid var(--bs-red); }
-.bs-panel-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); gap: 16px; align-items: stretch; }
-.bs-panel { min-height: 230px; }
-.bs-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid var(--bs-border); }
-.bs-panel-heading a { color: var(--bs-text); font-size: 12px; text-decoration: none; }.bs-panel-heading a:hover { text-decoration: underline; }
-.bs-activity-list, .bs-job-list { list-style: none; padding: 0; margin: 0; }
-.bs-activity-list li { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 10px; align-items: center; min-height: 40px; border-bottom: 1px solid color-mix(in srgb, var(--bs-border) 65%, transparent); font-size: 13px; }
-.bs-activity-list li:last-child, .bs-job-list li:last-child { border-bottom: 0; }
-.bs-activity-icon { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 7px; background: color-mix(in srgb, var(--bs-green) 12%, var(--bs-surface)); color: var(--bs-green); font-weight: 700; }
-.bs-activity-copy { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bs-activity-list time, .bs-job-list time { color: var(--bs-muted); font-size: 11px; white-space: nowrap; }
-.bs-job-list li { border-bottom: 1px solid color-mix(in srgb, var(--bs-border) 65%, transparent); }
-.bs-job-list a { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; color: var(--bs-text); text-decoration: none; }
-.bs-job-list a:hover b { text-decoration: underline; }
-.bs-job-list a > span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }.bs-job-list b { font-size: 13px; }.bs-job-list small { color: var(--bs-muted); font-size: 11px; }
-.bs-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 160px; text-align: center; color: var(--bs-muted); gap: 6px; }
-.bs-empty > span { font-size: 25px; color: var(--bs-green); }.bs-empty b { color: var(--bs-text); font-size: 13px; }.bs-empty p { margin: 0; font-size: 12px; }
-.bs-footer { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; padding: 14px 18px; }
-.bs-footer-section + .bs-footer-section { border-left: 1px solid var(--bs-border); padding-left: 22px; }
-.bs-footer-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.bs-footer-section p { margin: 7px 0; color: var(--bs-muted); font-size: 12px; }.bs-footer-section .bs-error-text { color: var(--bs-red); }
-.bs-muted { color: var(--bs-muted); }.bs-timezone-note { text-align: right; margin-top: -8px; }
 
-@media (max-width: 850px) {
-  .bs-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .bs-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .bs-panel-grid { grid-template-columns: 1fr; }
+/* ----- header (reference o_om_header / bigNumber / segmentBar) ----- */
+.bs-header {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 24px; flex-wrap: wrap; margin-bottom: 18px;
 }
-@media (max-width: 560px) {
-  .bs-dashboard { gap: 12px; }
-  .bs-card { padding: 14px; }
-  .bs-health-top, .bs-health-main { align-items: flex-start; }
-  .bs-health-main { flex-direction: column; gap: 10px; }
-  .bs-health-items { gap: 8px 12px; }
-  .bs-progress-wrap { width: 100%; }
-  .bs-stat-grid, .bs-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-  .bs-stat strong, .bs-kpi strong { font-size: 26px; }
-  .bs-kpi { min-height: 100px; }
-  .bs-footer { grid-template-columns: 1fr; gap: 12px; }
-  .bs-footer-section + .bs-footer-section { border-left: 0; border-top: 1px solid var(--bs-border); padding: 12px 0 0; }
+.bs-title {
+  font: var(--bs-display); letter-spacing: -0.5px; margin: 0 0 4px;
 }
-@media (max-width: 400px) {
-  .bs-stat-grid, .bs-kpi-grid { grid-template-columns: 1fr; }
-  .bs-health-items { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .bs-activity-list li { grid-template-columns: 26px minmax(0, 1fr); padding: 6px 0; }
-  .bs-activity-list time { grid-column: 2; }
-  .bs-header { align-items: flex-start; }
+.bs-subtitle { font-size: 14px; color: var(--bs-ink-soft); margin: 0 0 16px; }
+.bs-header-actions { display: flex; align-items: center; gap: 8px; }
+
+.bs-segment-bar {
+  display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; max-width: 640px;
 }
-@media (prefers-color-scheme: dark) {
-  .bs-dashboard { --bs-surface: var(--s-color-bg, #1f2328); --bs-text: var(--s-color-text, #f0f1f2); --bs-muted: var(--s-color-text-subdued, #b3bac1); --bs-border: var(--s-color-border, #41474e); }
-  .bs-card { box-shadow: 0 2px 8px rgb(0 0 0 / 20%); }
+.bs-segment { display: flex; flex-direction: column; gap: 6px; min-width: 64px; text-decoration: none; }
+.bs-segment-label {
+  display: flex; justify-content: space-between; gap: 8px;
+  font-size: 11.5px; color: var(--bs-ink-soft);
+}
+.bs-segment-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bs-segment-pct { font-variant-numeric: tabular-nums; }
+
+/* ----- bento grid ----- */
+.bs-bento {
+  display: grid; gap: 15px;
+  grid-auto-rows: minmax(120px, auto);
+  grid-template-columns: repeat(12, 1fr);
+  grid-template-areas:
+    "ring ring ring overtime overtime overtime overtime status status status summary summary"
+    "attention attention attention updates updates updates jobs jobs sync sync sync sync";
+}
+.bs-bento-ring { grid-area: ring; }
+.bs-bento-overtime { grid-area: overtime; }
+.bs-bento-status { grid-area: status; }
+.bs-bento-summary { grid-area: summary; }
+.bs-bento-attention { grid-area: attention; }
+.bs-bento-updates { grid-area: updates; }
+.bs-bento-jobs { grid-area: jobs; }
+.bs-bento-sync { grid-area: sync; }
+.bs-bento .bs-bento-sync:has(+ .bs-banner) { margin-bottom: 4px; }
+
+.bs-card-title {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 10px; margin-bottom: 14px;
+}
+.bs-card-title h3 { font-size: 16px; font-weight: 500; margin: 0; color: var(--bs-ink); }
+.bs-card-sub { font-size: 12px; color: var(--bs-ink-soft); white-space: nowrap; text-decoration: none; }
+a.bs-card-sub:hover { text-decoration: underline; }
+
+/* ----- big numbers (Today card) ----- */
+.bs-header-numbers { display: flex; gap: 34px; flex-wrap: wrap; margin-bottom: 12px; }
+.bs-big-number { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.bs-big-number-label {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.4px;
+  text-transform: uppercase; color: var(--bs-ink-soft);
+}
+.bs-big-number-value {
+  font-size: 44px; font-weight: 300; line-height: 1.05;
+  font-variant-numeric: tabular-nums; letter-spacing: -1px; color: var(--bs-ink);
+}
+.bs-big-number-secondary { font-size: 13px; color: var(--bs-ink-soft); }
+
+/* ----- overtime head ----- */
+.bs-ot-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.bs-ot-total {
+  font-size: 40px; font-weight: 300; line-height: 1;
+  font-variant-numeric: tabular-nums; letter-spacing: -1px;
+}
+.bs-ot-caption { font-size: 12px; color: var(--bs-ink-soft); }
+
+/* ----- bars (reference o_om_bars) ----- */
+.bs-bars {
+  flex: 1; display: flex; align-items: flex-end; gap: 8px;
+  min-height: 150px; padding-top: 26px;
+}
+.bs-bar-col {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: flex-end; gap: 5px;
+  position: relative; height: 100%;
+}
+.bs-bar {
+  width: min(56%, 26px); border-radius: 999px 999px 7px 7px;
+  background: var(--bs-bar-base); min-height: 6px;
+  transform-origin: bottom center; animation: bs-grow-v 0.5s ease both;
+  transition: background 0.15s ease;
+}
+.bs-bar-peak .bs-bar { background: var(--bs-accent); }
+.bs-bar-label {
+  font-size: 10.5px; color: var(--bs-ink-soft); white-space: nowrap;
+}
+.bs-bar-tip {
+  position: absolute; bottom: calc(100% + 6px); left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  background: var(--bs-charcoal); color: var(--bs-on-charcoal);
+  border-radius: 12px; padding: 8px 12px; font-size: 11.5px;
+  white-space: nowrap; opacity: 0; pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease; z-index: 3;
+  display: flex; flex-direction: column; gap: 3px;
+}
+.bs-bar-tip-count { font-weight: 700; }
+.bs-bar-tip-row { display: flex; align-items: center; gap: 6px; color: var(--bs-on-charcoal-soft); }
+.bs-bar-col:hover .bs-bar-tip { opacity: 1; transform: translateX(-50%) translateY(0); }
+@keyframes bs-grow-v { from { transform: scaleY(0); } }
+
+/* ----- ring (reference today_ring) ----- */
+.bs-ring-wrap {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 14px; min-height: 0;
+}
+.bs-ring-box { position: relative; width: min(200px, 70%); }
+.bs-ring-svg { width: 100%; height: auto; display: block; }
+.bs-ring-center {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 2px; text-align: center;
+}
+.bs-ring-value {
+  font-size: 38px; font-weight: 300; line-height: 1;
+  font-variant-numeric: tabular-nums; letter-spacing: -1px; color: var(--bs-ink);
+}
+.bs-ring-label {
+  font-size: 12px; font-weight: 600; color: var(--bs-ink-soft);
+  text-transform: uppercase; letter-spacing: 0.4px;
+}
+.bs-ring-sub { font-size: 11.5px; color: var(--bs-ink-soft); }
+.bs-widget-note { font-size: 11.5px; color: var(--bs-ink-soft); margin: 8px 0 0; }
+
+/* ----- status rows reuse .bs-status-row from theme.css ----- */
+
+/* ----- attention (dark card) ----- */
+.bs-attention-count {
+  font-size: 12px; font-weight: 600; color: var(--bs-accent);
+  font-variant-numeric: tabular-nums;
+}
+.bs-attention-rows { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; min-height: 0; flex: 1; }
+.bs-attention-row {
+  display: flex; align-items: center; gap: 12px; border-radius: 16px;
+  padding: 9px 10px; cursor: pointer; text-align: left; text-decoration: none;
+  transition: background 0.15s ease;
+}
+.bs-attention-row:hover { background: rgba(255, 255, 255, 0.06); }
+.bs-attention-chip {
+  width: 34px; height: 34px; border-radius: 50%; display: flex;
+  align-items: center; justify-content: center; font-size: 13px; flex: 0 0 auto;
+}
+.bs-attention-chip-red { background: rgba(229, 100, 91, 0.18); color: #ff9d94; }
+.bs-attention-chip-amber { background: rgba(255, 213, 74, 0.16); color: var(--bs-accent); }
+.bs-attention-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.bs-attention-label {
+  font-size: 13px; font-weight: 600; color: var(--bs-on-charcoal);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bs-attention-sub {
+  font-size: 11.5px; color: var(--bs-on-charcoal-soft);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bs-attention-count-badge {
+  font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--bs-on-charcoal);
+}
+.bs-all-clear {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 10px; flex: 1; color: var(--bs-on-charcoal-soft);
+  text-align: center;
+}
+.bs-all-clear > span { font-size: 30px; color: var(--bs-success); }
+.bs-all-clear p { margin: 0; font-size: 13px; max-width: 230px; }
+
+/* ----- activity / job lists ----- */
+.bs-activity-list, .bs-job-list {
+  list-style: none; margin: 0; padding: 0; display: flex;
+  flex-direction: column; gap: 4px; overflow-y: auto; min-height: 0; flex: 1;
+}
+.bs-activity-list li, .bs-job-list li {
+  display: flex; align-items: center; gap: 12px; border-radius: 12px;
+  padding: 7px 8px; transition: background 0.15s ease; font-size: 13px;
+}
+.bs-activity-list li:hover, .bs-job-list li:hover { background: var(--bs-hover-wash); }
+.bs-activity-icon {
+  width: 30px; height: 30px; border-radius: 50%; flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bs-soft-chip); color: var(--bs-ink-soft); font-size: 13px;
+}
+.bs-activity-copy { flex: 1; min-width: 0; }
+.bs-activity-list time, .bs-job-list time {
+  font-size: 11px; color: var(--bs-ink-soft); white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.bs-job-list a {
+  display: flex; align-items: center; gap: 12px; text-decoration: none;
+  color: inherit; width: 100%;
+}
+.bs-job-list a > span { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.bs-job-list small { color: var(--bs-ink-soft); font-size: 11.5px; }
+
+/* ----- sync/write footer ----- */
+.bs-footer {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 18px;
+}
+.bs-footer-section { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.bs-footer-title { display: flex; align-items: center; gap: 10px; }
+.bs-footer h2 { margin: 0; font-size: 16px; font-weight: 500; }
+.bs-footer p { margin: 0; font-size: 13px; }
+.bs-error-text { color: var(--bs-danger); font-size: 12.5px; }
+.bs-footnote { font-size: 12px; color: var(--bs-ink-soft); margin: 10px 2px 0; }
+
+/* ----- sparkline / chart sizing -----
+   Fixed heights (not min-height): an SVG with a 1:1 viewBox and width:100%
+   otherwise becomes a square as tall as it is wide. */
+.bs-sparkline { height: 34px; }
+.bs-chart { height: 120px; }
+.bs-chart-sm { height: 84px; }
+
+/* ----- responsive (reference breakpoints mapped to our widths) ----- */
+@media (max-width: 1400px) {
+  .bs-bento {
+    grid-template-columns: repeat(6, 1fr);
+    grid-template-areas:
+      "ring ring ring overtime overtime overtime"
+      "status status status summary summary summary"
+      "attention attention attention updates updates updates"
+      "jobs jobs jobs sync sync sync";
+  }
+}
+@media (max-width: 900px) {
+  .bs-bento {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "attention" "ring" "summary" "overtime" "status" "jobs" "updates" "sync";
+  }
+  .bs-footer { grid-template-columns: 1fr; }
+  .bs-title { font-size: 30px; }
+  .bs-big-number-value { font-size: 34px; }
+}
+@media (max-width: 480px) {
+  .bs-header-numbers { gap: 20px; }
+  .bs-bar-label { font-size: 9.5px; }
+  .bs-ring-box { width: min(170px, 80%); }
 }
