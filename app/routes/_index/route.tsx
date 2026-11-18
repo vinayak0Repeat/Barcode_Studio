@@ -30,36 +30,23 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <h1 className={styles.heading}>A short heading about [your app]</h1>
+        <span className={styles.eyebrow}>Barcode Studio</span>
+        <h1 className={styles.heading}>Open your store workspace</h1>
         <p className={styles.text}>
-          A tagline about [your app] that describes your value proposition.
+          This page appears when Barcode Studio opens without Shopify store context. Open the app from Shopify Admin, or enter your store domain below to reconnect.
         </p>
         {showForm && (
           <Form className={styles.form} method="post">
             <label className={styles.label}>
-              <span>Shop domain</span>
-              <input className={styles.input} type="text" name="shop" />
-              <span>{errors?.shop ?? "e.g: my-shop-domain.myshopify.com"}</span>
+              <span>Shopify store domain</span>
+              <input className={styles.input} type="text" name="shop" placeholder="your-store.myshopify.com" autoComplete="url" />
+              <span className={errors?.shop ? styles.error : styles.hint}>{errors?.shop ?? "Enter your .myshopify.com domain."}</span>
             </label>
             <button className={styles.button} type="submit">
-              Log in
+              Reconnect store
             </button>
           </Form>
         )}
-        <ul className={styles.list}>
-          <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
-          </li>
-          <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
-          </li>
-          <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
-          </li>
-        </ul>
       </div>
     </div>
   );
