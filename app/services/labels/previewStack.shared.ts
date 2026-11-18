@@ -69,6 +69,46 @@ export function uniqueBarcodeUrls(copies: Array<{ barcode: string | null }>, bar
   return [...new Set(copies.map(({ barcode }) => `/api/barcode-svg?value=${encodeURIComponent(barcode ?? "")}&type=${encodeURIComponent(barcodeType)}`))];
 }
 
+export interface BarcodeSvgSource { src: string | null; fallback: boolean }
+export type BarcodeSvgRequest = (url: string) => Promise<Response>;
+export type BarcodeSvgPromiseCache = Map<string, Promise<BarcodeSvgSource>>;
+
+/** Fetch each distinct preview SVG once, retry one failed request, and share its data URL across copies. */
+export async function loadBarcodeSvgSources(
+  urls: string[],
+  request: BarcodeSvgRequest = (url) => fetch(url, { credentials: "same-origin" }),
+  cache: BarcodeSvgPromiseCache = new Map(),
+): Promise<Map<string, BarcodeSvgSource>> {
+  const unique = [...new Set(urls)];
+  const sources = await Promise.all(unique.map(async (url) => {
+    let sourcePromise = cache.get(url);
+    if (!sourcePromise) {
+      sourcePromise = (async () => {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            const response = await request(url);
+            if (!response.ok) throw new Error(`Barcode request failed (${response.status})`);
+            const svg = await response.text();
+            if (!/<svg\b/i.test(svg)) throw new Error("Barcode response was not SVG");
+            return {
+              src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
+              fallback: response.headers.get("x-barcode-fallback") === "code128",
+            };
+          } catch {
+            if (attempt === 1) return { src: null, fallback: false };
+          }
+        }
+        return { src: null, fallback: false };
+      })();
+      cache.set(url, sourcePromise);
+    }
+    const source = await sourcePromise;
+    if (!source.src) cache.delete(url);
+    return [url, source] as const;
+  }));
+  return new Map(sources);
+}
+
 export function previewPage<T>(items: T[], visibleCount: number): { visible: T[]; hasMore: boolean } {
   return { visible: items.slice(0, Math.max(0, visibleCount)), hasMore: items.length > visibleCount };
 }

@@ -43,7 +43,7 @@ import printStyles from "../styles/print-labels.css?url";
 import { barcodeStatuses } from "../services/barcode/status.server";
 import { validateValue } from "../services/barcode/validate.shared";
 import { barcodeLabelStatus } from "../services/barcode/status.shared";
-import { buildPreviewEntries, buildPreviewNotes, countPrintableLabels, previewPage, shouldShowPreviewEmptyState, uniqueBarcodeUrls } from "../services/labels/previewStack.shared";
+import { buildPreviewEntries, buildPreviewNotes, countPrintableLabels, loadBarcodeSvgSources, previewPage, shouldShowPreviewEmptyState, uniqueBarcodeUrls, type BarcodeSvgPromiseCache, type BarcodeSvgSource } from "../services/labels/previewStack.shared";
 import { diffRestoreLines } from "../services/printHistory.shared";
 import { createPrintedActivity } from "../services/printJobActivity.server";
 import { barcodeEditFailure } from "../services/labels/barcodeEdit.shared";
@@ -549,6 +549,8 @@ export default function PrintLabelsPage() {
   const [barcodeErrors, setBarcodeErrors] = useState<Record<string, string>>({});
   const [barcodeSaved, setBarcodeSaved] = useState<Record<string, string>>({});
   const [fallbackBarcodeUrls, setFallbackBarcodeUrls] = useState<Set<string>>(new Set());
+  const [barcodeSvgSources, setBarcodeSvgSources] = useState<Record<string, BarcodeSvgSource>>({});
+  const barcodeSvgCache = useRef<BarcodeSvgPromiseCache>(new Map());
   const [savingBarcode, setSavingBarcode] = useState<Set<string>>(new Set());
   const cancelBarcodeSave = useRef(new Set<string>());
   const barcodeFetcher = useFetcher<typeof action>();
@@ -599,12 +601,18 @@ export default function PrintLabelsPage() {
   const barcodeUrls = uniqueBarcodeUrls(visibleEntries.visible, previewType);
   useEffect(() => {
     let cancelled = false;
-    void Promise.all(barcodeUrls.map(async (url) => {
-      try {
-        const response = await fetch(url, { credentials: "same-origin" });
-        return response.headers.get("x-barcode-fallback") === "code128" ? url : null;
-      } catch { return null; }
-    })).then((urls) => { if (!cancelled) setFallbackBarcodeUrls(new Set(urls.filter((url): url is string => Boolean(url)))); });
+    void loadBarcodeSvgSources(barcodeUrls, undefined, barcodeSvgCache.current).then((sources) => {
+      if (cancelled) return;
+      setBarcodeSvgSources((previous) => ({ ...previous, ...Object.fromEntries(sources) }));
+      setFallbackBarcodeUrls((previous) => {
+        const next = new Set(previous);
+        for (const [url, source] of sources) {
+          if (source.fallback) next.add(url);
+          else next.delete(url);
+        }
+        return next;
+      });
+    });
     return () => { cancelled = true; };
   }, [barcodeUrls.join("\n")]);
   // ----- product fetching (page appends) -----
@@ -1389,10 +1397,17 @@ export default function PrintLabelsPage() {
             const variant = variantByGid.get(entry.gid);
             const size = previewSize;
             const imageUrl = entry.barcode ? `/api/barcode-svg?value=${encodeURIComponent(entry.barcode)}&type=${encodeURIComponent(previewTemplate?.barcodeType ?? loaderData.barcodeType)}` : null;
+            const barcodeSource = imageUrl ? barcodeSvgSources[imageUrl] : undefined;
             const geometry = size ? fitLabel({ widthMm: size.widthMm, heightMm: size.heightMm, barcodeValue: entry.barcode ?? "", lines: {
                 name: productByGid.get(variant?.productGid ?? "")?.title, variant: variant?.title === "Default Title" ? null : variant?.title,
                 sku: variant?.sku, price: formatPrice(variant?.price), barcodeText: entry.barcode,
               }, toggles, overrides: previewTemplate ?? {} }) : null;
+            const barcodeImageStyle = geometry ? {
+              left: `${geometry.barcodeBox.xMm / geometry.widthMm * 100}%`,
+              top: `${geometry.barcodeBox.yMm / geometry.heightMm * 100}%`,
+              width: `${geometry.barcodeBox.widthMm / geometry.widthMm * 100}%`,
+              height: `${geometry.barcodeBox.heightMm / geometry.heightMm * 100}%`,
+            } : undefined;
             return <article key={`${entry.gid}-${entry.copy}`} className="bs-label-copy" onClick={() => {
               setHighlightedPreviewGid(entry.gid);
               document.getElementById(`variant-${entry.gid}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1401,7 +1416,10 @@ export default function PrintLabelsPage() {
               <p className="bs-label-caption">{entry.caption}</p>
               <div className="bs-label-paper" style={{ aspectRatio: `${size?.widthMm ?? 50} / ${size?.heightMm ?? 25}` }} data-fit-label-width-mm={geometry?.widthMm}>
                 {geometry?.lines.map((line) => <div key={line.key} className="bs-label-geometry-text" style={{ left: `${line.xMm / geometry.widthMm * 100}%`, top: `${line.yMm / geometry.heightMm * 100}%`, width: `${line.widthMm / geometry.widthMm * 100}%`, height: `${line.heightMm / geometry.heightMm * 100}%`, fontSize: `${line.fontSizePt * 0.3528 / geometry.heightMm * 100}cqh`, textAlign: line.align }}>{line.text}</div>)}
-                {geometry && imageUrl && <img className="bs-label-bars" loading="lazy" src={imageUrl} alt="Barcode" style={{ left: `${geometry.barcodeBox.xMm / geometry.widthMm * 100}%`, top: `${geometry.barcodeBox.yMm / geometry.heightMm * 100}%`, width: `${geometry.barcodeBox.widthMm / geometry.widthMm * 100}%`, height: `${geometry.barcodeBox.heightMm / geometry.heightMm * 100}%` }} />}
+                {geometry && imageUrl && (barcodeSource?.src
+                  ? <img className="bs-label-bars" src={barcodeSource.src} alt="Barcode" style={barcodeImageStyle} />
+                  : barcodeSource ? <span className="bs-label-bars-error" role="img" aria-label="Barcode unavailable" style={barcodeImageStyle}>Barcode unavailable</span>
+                    : <span className="bs-label-bars-pending" role="img" aria-label="Loading barcode" style={barcodeImageStyle} />)}
               </div>
               {imageUrl && fallbackBarcodeUrls.has(imageUrl) && <p className="bs-fallback-note">Rendered as Code128 (fallback)</p>}
             </article>;

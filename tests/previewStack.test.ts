@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { buildPreviewEntries, buildPreviewNotes, countPrintableLabels, expandPreviewCopies, previewPage, restorePrintSelection, shouldShowPreviewEmptyState, skippedPreviewRows, uniqueBarcodeUrls } from "../app/services/labels/previewStack.shared";
+import { describe, expect, it, vi } from "vitest";
+import { buildPreviewEntries, buildPreviewNotes, countPrintableLabels, expandPreviewCopies, loadBarcodeSvgSources, previewPage, restorePrintSelection, shouldShowPreviewEmptyState, skippedPreviewRows, uniqueBarcodeUrls } from "../app/services/labels/previewStack.shared";
 import { fitLabel } from "../app/services/labels/labelGeometry.shared";
 import { barcodeBars } from "../app/services/labels/barcodeVector.server";
 import { layoutJob } from "../app/services/labels/layout.server";
@@ -22,6 +22,38 @@ describe("copy stack preview helpers", () => {
     const sixtyOne = expandPreviewCopies([{ gid: "a", quantity: 61 }], rows);
     expect(previewPage(sixtyOne, 60)).toMatchObject({ visible: sixtyOne.slice(0, 60), hasMore: true });
     expect(previewPage(sixtyOne, 120).hasMore).toBe(false);
+  });
+
+  it("fetches one SVG per unique URL and shares it across every repeated copy", async () => {
+    const url = "/api/barcode-svg?value=123456789012&type=code128";
+    const request = vi.fn(async () => new Response('<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>', {
+      headers: { "content-type": "image/svg+xml" },
+    }));
+    const copies = [{ barcode: "123456789012" }, { barcode: "123456789012" }, { barcode: "123456789012" }];
+    const urls = uniqueBarcodeUrls(copies, "code128");
+    const sources = await loadBarcodeSvgSources([...urls, ...urls], request);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(copies.map(() => sources.get(url)?.src)).toEqual(Array(3).fill(sources.get(url)?.src));
+    expect(decodeURIComponent(sources.get(url)?.src?.split(",")[1] ?? "")).toContain("<svg");
+  });
+
+  it("retries a failed SVG request once and reports failure after the second attempt", async () => {
+    const url = "/api/barcode-svg?value=123456789012&type=code128";
+    let calls = 0;
+    const request = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("temporary network failure");
+      return new Response('<svg xmlns="http://www.w3.org/2000/svg"></svg>', { headers: { "content-type": "image/svg+xml" } });
+    });
+    const sources = await loadBarcodeSvgSources([url], request);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(sources.get(url)?.src).toContain("data:image/svg+xml");
+
+    const alwaysFails = vi.fn(async () => { throw new Error("network unavailable"); });
+    const failedSources = await loadBarcodeSvgSources([url], alwaysFails);
+    expect(alwaysFails).toHaveBeenCalledTimes(2);
+    expect(failedSources.get(url)).toEqual({ src: null, fallback: false });
   });
 
   it("restores quantities and reports variants no longer available in cache", () => {
