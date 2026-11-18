@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ActionFunctionArgs, LinksFunction, LoaderFunctionArgs } from "react-router";
-import { data, redirect, useActionData, useLoaderData, useSearchParams } from "react-router";
+import { Form, data, redirect, useActionData, useLoaderData, useSearchParams } from "react-router";
 import adminStyles from "../styles/label-admin.css?url";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
@@ -181,10 +181,10 @@ export default function TemplatesPage() {
             {page.templates.map((template) => <tr key={template.id}>
               <td><b>{template.name}</b></td><td>{page.sizes.find((size) => size.id === template.sizeId)?.name ?? "Unavailable"}</td><td>{template.barcodeType} · {template.layout}</td>
               <td>{template.isDefault ? <s-badge tone="success">Default</s-badge> : "—"}</td><td><s-badge tone={template.active ? "success" : "neutral"}>{template.active ? "Active" : "Archived"}</s-badge></td><td>{template.usedByCount} print job(s)</td>
-              <td className="bs-row-actions"><s-button variant="tertiary" onClick={() => setParams({ edit: template.id })}>Edit</s-button><form method="post"><input type="hidden" name="id" value={template.id}/><input type="hidden" name="intent" value="duplicate"/><s-button variant="tertiary" type="submit">Duplicate</s-button></form>
-                {template.active && !template.isDefault && <form method="post"><input type="hidden" name="id" value={template.id}/><input type="hidden" name="intent" value="default"/><s-button variant="tertiary" type="submit">Set default</s-button></form>}
-                <form method="post"><input type="hidden" name="id" value={template.id}/><input type="hidden" name="intent" value="archive"/><s-button variant="tertiary" type="submit">{template.active ? "Archive" : "Restore"}</s-button></form>
-                {template.usedByCount === 0 && <form method="post"><input type="hidden" name="id" value={template.id}/><input type="hidden" name="intent" value="delete"/><s-button variant="tertiary" type="submit">Delete</s-button></form>}
+              <td className="bs-row-actions"><s-button variant="tertiary" onClick={() => setParams({ edit: template.id })}>Edit</s-button><Form method="post"><input type="hidden" name="id" value={template.id}/><input type="hidden" name="intent" value="duplicate"/><s-button variant="tertiary" type="submit">Duplicate</s-button></Form>
+                {template.active && !template.isDefault && <Form method="post"><input type="hidden" name="id" value={template.id}/><input type="hidden" name="intent" value="default"/><s-button variant="tertiary" type="submit">Set default</s-button></Form>}
+                <Form method="post"><input type="hidden" name="id" value={template.id}/><input type="hidden" name="intent" value="archive"/><s-button variant="tertiary" type="submit">{template.active ? "Archive" : "Restore"}</s-button></Form>
+                {template.usedByCount === 0 && <Form method="post"><input type="hidden" name="id" value={template.id}/><input type="hidden" name="intent" value="delete"/><s-button variant="tertiary" type="submit">Delete</s-button></Form>}
               </td>
             </tr>)}
           </tbody></table></div>}
@@ -193,7 +193,7 @@ export default function TemplatesPage() {
       {(page.creating || editing) && <section className="bs-admin-editor bs-admin-card">
         <div className="bs-editor-title"><div><h2>{editing ? "Edit template" : "Create template"}</h2><p>Template settings are stored with the shop and used by preview and print.</p></div><s-button variant="tertiary" onClick={closeEditor} accessibilityLabel="Close template editor">Close</s-button></div>
         <div className="bs-editor-grid">
-          <form id={formId} method="post" className="bs-admin-form">
+          <Form id={formId} method="post" className="bs-admin-form">
             <input type="hidden" name="intent" value="save"/><input type="hidden" name="active" value={editing?.active === false ? "false" : "true"}/>{editing && <input type="hidden" name="id" value={editing.id}/>}
             <section><h3>Template</h3><div className="bs-form-grid">
               <Field label="Name" name="name" value={editing?.name ?? ""} required error={fieldErrors?.name}/><Field label="Sequence" name="sequence" type="number" value={editing?.sequence ?? 10} step={1} error={fieldErrors?.sequence}/>
@@ -209,7 +209,7 @@ export default function TemplatesPage() {
               <Field label="Product name (pt)" name="nameFontSize" type="number" value={editing?.nameFontSize ?? 0} min={0} max={96} step={0.1}/><Field label="SKU (pt)" name="skuFontSize" type="number" value={editing?.skuFontSize ?? 0} min={0} max={96} step={0.1}/><Field label="Price (pt)" name="priceFontSize" type="number" value={editing?.priceFontSize ?? 0} min={0} max={96} step={0.1}/><Field label="Barcode number (pt)" name="barcodeTextFontSize" type="number" value={editing?.barcodeTextFontSize ?? 0} min={0} max={96} step={0.1}/><Field label="Barcode width (%)" name="barcodeWidthPct" type="number" value={editing?.barcodeWidthPct ?? 0} min={0} max={100} step={0.1}/><Field label="Barcode height (%)" name="barcodeHeightPct" type="number" value={editing?.barcodeHeightPct ?? 0} min={0} max={100} step={0.1}/>
             </div></section>
             <div className="bs-editor-actions"><s-button type="submit">Save template</s-button><s-button variant="tertiary" onClick={closeEditor}>Cancel</s-button></div>
-          </form>
+          </Form>
           <aside className="bs-template-preview"><h3>Live preview</h3><p>{previewSize ? `${previewSize.widthMm} × ${previewSize.heightMm} mm` : "Choose a label size"}</p>{previewHtml ? <div className="bs-template-preview-output" dangerouslySetInnerHTML={{ __html: previewHtml }} /> : <div className="bs-admin-empty">Choose an active size to preview.</div>}</aside>
         </div>
       </section>}
