@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Barcode Studio icon renderer</title>
+  <style>
+    html, body { margin: 0; padding: 0; }
+    body { width: max-content; min-width: 100vw; min-height: 100vh; background: #2b2b2b; }
+    img { display: block; object-fit: contain; }
+  </style>
+</head>
+<body>
+  <img id="icon" alt="" src="app-icon.svg" />
+  <script>
+    const params = new URLSearchParams(location.search);
+    const size = Number(params.get("size") || 1200);
+    const icon = document.getElementById("icon");
+    const source = params.get("src");
+    if (source) icon.src = source;
+    icon.width = size;
+    icon.height = size;
+    const backgrounds = { white: "#ffffff", grey: "#f1f1f1", dark: "#1a1a1a" };
+    const background = backgrounds[params.get("bg")];
+    if (background) {
+      document.body.style.width = "100vw";
+      document.body.style.minHeight = "100vh";
+      document.body.style.background = background;
+      document.body.style.display = "grid";
+      document.body.style.placeItems = "center";
+    }
+  </script>
+</body>
+</html>

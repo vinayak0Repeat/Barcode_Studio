@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1200" width="1200" height="1200">
+  <defs>
+    <linearGradient id="bgC" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd54a"/>
+      <stop offset="1" stop-color="#f2b83d"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="1200" fill="url(#bgC)"/>
+
+  <path fill="#2b2b2b" d="
+    M310 430 h76 v340 h-76 z
+    M426 430 h42 v340 h-42 z
+    M510 430 h110 v340 h-110 z
+    M658 430 h42 v340 h-42 z
+    M742 430 h76 v340 h-76 z
+    M856 430 h42 v340 h-42 z"/>
+
+  <circle cx="856" cy="846" r="78" fill="#2b2b2b"/>
+  <circle cx="856" cy="846" r="34" fill="#fff3c4"/>
+</svg>

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Barcode Studio icon concepts</title>
+  <style>
+    * { box-sizing: border-box; }
+    html { background: #e9e9e6; }
+    body {
+      width: 1040px;
+      margin: 0 auto;
+      padding: 22px;
+      color: #242421;
+      background: #f7f6f2;
+      font: 13px/1.35 "Segoe UI", Arial, sans-serif;
+    }
+    h1 { margin: 0 0 5px; font-size: 20px; font-weight: 650; }
+    .intro { margin: 0 0 18px; color: #65655f; }
+    .concept { margin: 0 0 16px; padding: 14px; background: #fff; border: 1px solid #deddd6; border-radius: 12px; }
+    .concept-title { display: flex; align-items: baseline; gap: 10px; margin: 0 0 10px; }
+    .concept-title h2 { margin: 0; font-size: 16px; }
+    .concept-title span { color: #74746c; font-size: 11px; }
+    .matrix { display: grid; grid-template-columns: 82px repeat(3, minmax(0, 1fr)); gap: 7px; align-items: stretch; }
+    .column-label { align-self: end; padding: 0 0 3px; color: #77776f; text-align: center; font-size: 10px; font-weight: 600; }
+    .size-label { display: flex; align-items: center; color: #5b5b55; font-size: 11px; font-weight: 600; }
+    .background-label { display: flex; align-items: center; color: #5b5b55; font-size: 11px; }
+    .sample { display: grid; place-items: center; padding: 8px; border: 1px solid #deded9; border-radius: 8px; }
+    .sample.white { background: #ffffff; }
+    .sample.grey { background: #f1f1f1; }
+    .sample.dark { color: #fff; background: #1a1a1a; border-color: #343434; }
+    .sample img { display: block; width: var(--size); height: var(--size); object-fit: contain; }
+    .size-256 { --size: 256px; min-height: 272px; }
+    .size-128 { --size: 128px; min-height: 144px; }
+    .size-64 { --size: 64px; min-height: 80px; }
+    .size-32 { --size: 32px; min-height: 80px; }
+    .foot { margin: 2px 0 0; color: #77776f; font-size: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Barcode Studio — icon concepts</h1>
+  <p class="intro">Compare each concept at 256, 128, 64 and 32 px on white, light grey and dark navigation backgrounds.</p>
+  <main id="concepts"></main>
+  <script>
+    const concepts = [
+      { file: "concept-a.svg", title: "Concept A · Scan frame", note: "Barcode framed by four scanner corners and a scan beam." },
+      { file: "concept-b.svg", title: "Concept B · Label tag", note: "Barcode on a hanging tag with a small accent glint." },
+      { file: "concept-c.svg", title: "Concept C · Amber flat", note: "Direct barcode glyph on an amber field." },
+    ];
+    const sizes = [256, 128, 64, 32];
+    const backgrounds = [
+      { name: "White", className: "white" },
+      { name: "Light grey", className: "grey" },
+      { name: "Dark", className: "dark" },
+    ];
+    const root = document.getElementById("concepts");
+    for (const item of concepts) {
+      const section = document.createElement("section");
+      section.className = "concept";
+      const title = document.createElement("div");
+      title.className = "concept-title";
+      const heading = document.createElement("h2");
+      heading.textContent = item.title;
+      const note = document.createElement("span");
+      note.textContent = item.note;
+      title.append(heading, note);
+      section.appendChild(title);
+
+      const matrix = document.createElement("div");
+      matrix.className = "matrix";
+      const blank = document.createElement("div");
+      matrix.appendChild(blank);
+      for (const background of backgrounds) {
+        const label = document.createElement("div");
+        label.className = "column-label";
+        label.textContent = `${background.name} · ${background.className === "white" ? "#ffffff" : background.className === "grey" ? "#f1f1f1" : "#1a1a1a"}`;
+        matrix.appendChild(label);
+      }
+      for (const size of sizes) {
+        const name = document.createElement("div");
+        name.className = "size-label";
+        name.textContent = `${size} px`;
+        matrix.appendChild(name);
+        for (const background of backgrounds) {
+          const sample = document.createElement("div");
+          sample.className = `sample ${background.className} size-${size}`;
+          const image = document.createElement("img");
+          image.src = item.file;
+          image.alt = `${item.title}, ${size} pixels on ${background.name}`;
+          image.width = size;
+          image.height = size;
+          sample.appendChild(image);
+          matrix.appendChild(sample);
+        }
+      }
+      section.appendChild(matrix);
+      root.appendChild(section);
+    }
+  </script>
+</body>
+</html>
