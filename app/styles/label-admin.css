@@ -193,7 +193,10 @@ s-page:has(.bs-settings-page) {
   transition:background-color .15s ease !important;
 }
 .bs-history-list-page s-table-row:last-child { border-bottom:0 !important; }
-.bs-history-list-page s-table-row:hover { background:color-mix(in srgb, var(--bs-accent) 18%, transparent) !important; }
+.bs-history-list-page s-table-row:hover {
+  background:color-mix(in srgb, var(--bs-accent) 18%, var(--bs-card-solid)) !important;
+  isolation:isolate;
+}
 .bs-history-list-page s-table-header,
 .bs-history-list-page s-table-cell {
   display:flex !important;
@@ -212,6 +215,10 @@ s-page:has(.bs-settings-page) {
 }
 .bs-history-list-page s-table-header { color:var(--bs-ink-soft) !important; font-size:11px !important; font-weight:600 !important; }
 .bs-history-list-page s-table-cell { font-size:12px !important; }
+.bs-history-list-page s-table-row:hover > s-table-cell {
+  background:transparent !important;
+  mix-blend-mode:darken;
+}
 .bs-history-list-page s-table-cell:nth-child(n+6) { font-variant-numeric:tabular-nums; }
 .bs-history-list-page s-table-cell:nth-child(9) s-badge { white-space:nowrap; }
 .bs-history-list-page s-table-cell:last-child { overflow:visible !important; }

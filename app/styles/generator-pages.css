@@ -358,14 +358,6 @@ s-page:has(.bs-generator-layout) {
   flex: 0 0 auto;
   white-space: nowrap;
 }
-/* Polaris paints each table-cell host over its row background. Match the
-   selected row tint on every cell host so selection reads as one surface. */
-:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-row:has(input[type="checkbox"]:checked) {
-  background: color-mix(in srgb, var(--bs-accent) 24%, var(--bs-card-solid));
-}
-:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-row:has(input[type="checkbox"]:checked) > s-table-cell {
-  background: color-mix(in srgb, var(--bs-accent) 24%, var(--bs-card-solid)) !important;
-}
 :is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-row:has(s-table-cell:only-child) {
   grid-template-columns: minmax(0, 1fr) !important;
   min-width: 0;
@@ -381,4 +373,18 @@ s-page:has(.bs-generator-layout) {
     grid-row: auto !important;
     justify-self: stretch !important;
   }
+}
+
+/* Keep the yellow row cue and make the cell hosts transparent over it. */
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-row:hover {
+  background: color-mix(in srgb, var(--bs-accent) 14%, var(--bs-card-solid)) !important;
+}
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-row:has(input[type="checkbox"]:checked),
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-row:has(input[type="checkbox"]:checked):hover {
+  background: color-mix(in srgb, var(--bs-accent) 24%, var(--bs-card-solid)) !important;
+  isolation: isolate;
+}
+:is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-row:has(input[type="checkbox"]:checked) > s-table-cell {
+  background: transparent !important;
+  mix-blend-mode: darken;
 }
