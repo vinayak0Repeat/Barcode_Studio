@@ -83,3 +83,39 @@ export async function statusCounts(shopId: string): Promise<StatusCounts> {
     duplicate: duplicateVariantCount,
   };
 }
+
+/** One grouped read for generator status counts and the active duplicate map. */
+export async function barcodeCatalogStats(shopId: string): Promise<{ counts: StatusCounts; duplicates: Map<string, string[]> }> {
+  const rows = await prisma.$queryRaw<Array<{
+    total: bigint;
+    missing: bigint;
+    duplicateCount: bigint;
+    barcode: string | null;
+    gids: string[] | null;
+  }>>`
+    WITH duplicate_groups AS (
+      SELECT "barcode", array_agg("gid" ORDER BY "createdAt" ASC) AS "gids"
+      FROM "CachedVariant"
+      WHERE "shopId" = ${shopId} AND "barcode" IS NOT NULL AND "status" = 'ACTIVE'
+      GROUP BY "barcode"
+      HAVING COUNT(*) > 1
+    ), counts AS (
+      SELECT COUNT(*) AS total,
+             COUNT(*) FILTER (WHERE "barcode" IS NULL) AS missing,
+             COUNT(*) FILTER (WHERE "barcode" IN (SELECT "barcode" FROM duplicate_groups)) AS "duplicateCount"
+      FROM "CachedVariant"
+      WHERE "shopId" = ${shopId}
+    )
+    SELECT counts.total, counts.missing, counts."duplicateCount", duplicate_groups."barcode", duplicate_groups."gids"
+    FROM counts LEFT JOIN duplicate_groups ON TRUE
+  `;
+  const first = rows[0];
+  const duplicates = new Map<string, string[]>();
+  for (const row of rows) {
+    if (row.barcode !== null && row.gids) duplicates.set(row.barcode, row.gids);
+  }
+  const total = Number(first?.total ?? 0);
+  const missing = Number(first?.missing ?? 0);
+  const duplicate = Number(first?.duplicateCount ?? 0);
+  return { counts: { total, missing, duplicate, ready: total - missing - duplicate }, duplicates };
+}

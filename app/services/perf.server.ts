@@ -30,6 +30,14 @@ export async function withPerf<T>(
   }
 }
 
+/** Route-loader adapter that keeps the existing PERF_LOG gate and counters. */
+export function withPerfLoader<TArgs, TResult>(
+  route: string,
+  loader: (args: TArgs) => Promise<TResult>,
+): (args: TArgs) => Promise<TResult> {
+  return (args) => withPerf(route, () => loader(args));
+}
+
 /** Server-Timing value for a measured loader (no-op unless PERF_LOG). */
 export function perfHeader(route: string, elapsedMs: number): string {
   return `app;desc="${route}";dur=${elapsedMs.toFixed(0)}`;

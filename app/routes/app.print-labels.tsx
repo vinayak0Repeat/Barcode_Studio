@@ -48,6 +48,8 @@ import { diffRestoreLines } from "../services/printHistory.shared";
 import { createPrintedActivity } from "../services/printJobActivity.server";
 import { barcodeEditFailure } from "../services/labels/barcodeEdit.shared";
 import { openPrintWindow } from "../services/labels/openPrintWindow.shared";
+import { withPerfLoader } from "../services/perf.server";
+import { invalidateDashboardSnapshot } from "../services/dashboard/cache.server";
 
 export const meta: MetaFunction = () => [
   { title: "Print Labels | Barcode Studio" },
@@ -69,7 +71,7 @@ interface VariantDetail {
   barcodeStatus?: "ready" | "missing" | "duplicate";
 }
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
+export const loader = withPerfLoader("app.print-labels", async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
 
@@ -101,7 +103,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // Job restoration is shop-scoped and uses the existing local cache only.
   const restoreId = new URL(request.url).searchParams.get("job");
-  const restoreJob = restoreId ? await prisma.printJob.findFirst({ where: { id: restoreId, shopId }, include: { lines: true } }) : null;
+  const restoreJob = restoreId ? await prisma.printJob.findFirst({
+    where: { id: restoreId, shopId },
+    select: {
+      id: true, templateId: true, templateSnap: true, sizeSnap: true,
+      lines: { select: { variantGid: true, productName: true, barcode: true, quantity: true } },
+    },
+  }) : null;
   let restore: null | { id: string; selection: Array<{ gid: string; quantity: number }>; variants: VariantDetail[]; products: PrintLabelProduct[]; sizeId: string; templateId: string; sheetMode: "roll" | "grid"; mode: QuantityMode; toggles: { showProductTitle: boolean; showVariantTitle: boolean; showSku: boolean; showPrice: boolean; showBarcodeText: boolean }; missing: string[] } = null;
   if (restoreJob) {
     const gids = [...new Set(restoreJob.lines.map((line) => line.variantGid))];
@@ -184,7 +192,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     barcodeLength: config.length,
     restore,
   };
-};
+});
 
 interface ActionResult {
   ok: boolean;
@@ -413,6 +421,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   });
   return created;
   });
+  invalidateDashboardSnapshot(session.shop);
 
   return data({
     ok: true,
@@ -1215,6 +1224,7 @@ export default function PrintLabelsPage() {
               icon="barcode"
               onClick={() => showModal(GENERATE_MODAL_ID)}
               accessibilityLabel="Generate barcodes for the selected variants without one"
+              {...(busy ? { loading: true } : {})}
               {...(busy || generateState.disabled ? { disabled: true } : {})}
             >
               Generate Barcode{generateState.labelSuffix}
@@ -1224,10 +1234,10 @@ export default function PrintLabelsPage() {
           <div className="bs-print-action-group">
             <s-button variant="secondary" icon="checkbox" onClick={() => void selectAllProducts()} {...(loadingMore || selectingAll || busy ? { disabled: true } : {})}>Select All Products</s-button>
             <label className="bs-print-control bs-quantity-control"><s-icon type="inventory" size="small" aria-hidden="true"></s-icon><select aria-label="Quantity mode" value={mode} onChange={(event) => setMode(event.target.value as QuantityMode)}><option value="stock">Use Stock Qty</option><option value="fixed">Fixed</option></select></label>
-            <details className="bs-clear-qty"><summary><s-icon type="broom" size="small" aria-hidden="true"></s-icon>Clear Qty</summary><div className="bs-clear-qty-menu"><button type="button" onClick={() => clearQty("reset")}>Reset to 1</button><button type="button" onClick={() => clearQty("zero")}>Set to 0</button></div></details>
+            <details className="bs-clear-qty"><summary><s-icon type="reset" size="small" aria-hidden="true"></s-icon>Clear Qty</summary><div className="bs-clear-qty-menu"><button type="button" onClick={() => clearQty("reset")}>Reset to 1</button><button type="button" onClick={() => clearQty("zero")}>Set to 0</button></div></details>
           </div>
           <div className="bs-print-action-group bs-print-output-actions">
-            <s-button variant="primary" onClick={() => submitPrint("print")} {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true } : {})}>Print</s-button>
+            <s-button variant="primary" onClick={() => submitPrint("print")} {...(busy ? { loading: true } : {})} {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true } : {})}>Print</s-button>
             <s-button variant="secondary" icon="download" onClick={() => submitPrint("pdf")} {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true, loading: busy } : {})}>{busy ? "Preparing PDF…" : "Save PDF"}</s-button>
             <s-link href="/app/generator">Generator</s-link>
           </div>
@@ -1494,6 +1504,7 @@ export default function PrintLabelsPage() {
           <s-button
             variant="primary"
             onClick={confirmGenerate}
+            {...(busy ? { loading: true } : {})}
             {...(busy || missingSelectedCount === 0 ? { disabled: true } : {})}
           >
             Generate ({missingSelectedCount})

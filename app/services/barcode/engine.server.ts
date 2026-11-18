@@ -1,5 +1,6 @@
 import type { AdminApiContext } from "@shopify/shopify-app-react-router/server";
 import prisma from "../../db.server";
+import { invalidateDashboardSnapshot } from "../dashboard/cache.server";
 import { writeProductBarcodes, type BarcodeWrite } from "../shopify/barcodeWriter.server";
 import {
   allocateBlock,
@@ -378,6 +379,7 @@ export function buildRealDeps(
           data: { barcode: u.barcode },
         });
       }
+      if (updates.length > 0) invalidateDashboardSnapshot(shopDomain);
     },
     activity: async (type, count) => {
       await prisma.activity.create({
@@ -388,6 +390,7 @@ export function buildRealDeps(
           ...(jobId ? { jobId } : {}),
         },
       });
+      invalidateDashboardSnapshot(shopDomain);
     },
   };
 }
@@ -661,6 +664,7 @@ export async function setBarcode(
     { variantId: variantGid, barcode: valueTrimmed },
   ]);
   await deps.updateCache([{ gid: variantGid, barcode: valueTrimmed }]);
+  invalidateDashboardSnapshot(shopDomain);
 }
 
 export async function regenerateOne(

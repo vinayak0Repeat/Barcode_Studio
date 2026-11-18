@@ -1,5 +1,6 @@
 import type { AdminApiContext } from "@shopify/shopify-app-react-router/server";
 import prisma from "../../db.server";
+import { invalidateDashboardSnapshot } from "../dashboard/cache.server";
 import {
   assertSafeToWrite,
   claimWriteJob,
@@ -309,6 +310,7 @@ export function buildRealSkuDeps(
           data: { sku: u.sku },
         });
       }
+      if (updates.length > 0) invalidateDashboardSnapshot(shopDomain);
     },
     activity: async (count) => {
       await prisma.activity.create({
@@ -320,6 +322,7 @@ export function buildRealSkuDeps(
           ...(jobId ? { jobId } : {}),
         },
       });
+      invalidateDashboardSnapshot(shopDomain);
     },
   };
 }
@@ -483,6 +486,7 @@ export async function setSku(
     where: { shopId: shopDomain, gid: variantGid },
     data: { sku: validation.value },
   });
+  invalidateDashboardSnapshot(shopDomain);
 }
 
 /**

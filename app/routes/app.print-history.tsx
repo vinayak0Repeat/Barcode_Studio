@@ -20,6 +20,7 @@ import { dayMonthBoundaries } from "../services/time/timezone.shared";
 import { issueReprintUrls } from "../services/reprint.server";
 import { openPrintWindow } from "../services/labels/openPrintWindow.shared";
 import adminStyles from "../styles/label-admin.css?url";
+import { withPerfLoader } from "../services/perf.server";
 
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: adminStyles }];
 
@@ -40,7 +41,7 @@ function boundaries(now: Date) {
   return dayMonthBoundaries(now, null);
 }
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
+export const loader = withPerfLoader("app.print-history", async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
   const url = new URL(request.url);
@@ -59,6 +60,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         orderBy: { at: "desc" },
         take: PAGE_SIZE,
         skip: page * PAGE_SIZE,
+        select: { id: true, type: true, at: true, staffId: true, productCount: true, labelCount: true, jobId: true },
       }),
       prisma.activity.count({ where }),
       prisma.activity.groupBy({
@@ -74,6 +76,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const safePage = Math.min(page, pageCount - 1);
     const pageRows = safePage === page ? rows : await prisma.activity.findMany({
       where, orderBy: { at: "desc" }, take: PAGE_SIZE, skip: safePage * PAGE_SIZE,
+      select: { id: true, type: true, at: true, staffId: true, productCount: true, labelCount: true, jobId: true },
     });
 
     // staff names via linked print jobs (printed rows carry jobId)
@@ -124,6 +127,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       orderBy: { printedAt: "desc" },
       take: PAGE_SIZE,
       skip: page * PAGE_SIZE,
+      select: { id: true, name: true, printedAt: true, staffName: true, sizeSnap: true, templateSnap: true, productCount: true, lineCount: true, labelCount: true, state: true },
     }),
     prisma.printJob.count({ where }),
     prisma.printJob.count({ where: countWhere("all") }),
@@ -139,6 +143,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const safePage = Math.min(page, pageCount - 1);
   const pageJobs = safePage === page ? jobs : await prisma.printJob.findMany({
     where, orderBy: { printedAt: "desc" }, take: PAGE_SIZE, skip: safePage * PAGE_SIZE,
+    select: { id: true, name: true, printedAt: true, staffName: true, sizeSnap: true, templateSnap: true, productCount: true, lineCount: true, labelCount: true, state: true },
   });
 
   return {
@@ -169,7 +174,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     templates,
     timeZone: "UTC" as const,
   };
-};
+});
 
 /**
  * Reprint / Save PDF: issues a FRESH signed URL for the existing job.

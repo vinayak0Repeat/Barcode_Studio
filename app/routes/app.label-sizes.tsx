@@ -6,6 +6,7 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { clearLabelDefault, getLabelDefault, setLabelDefault } from "../services/labels/adminSettings.server";
 import { parseLabelSizeInput } from "../services/labels/adminValidation.shared";
+import { withPerfLoader } from "../services/perf.server";
 
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: adminStyles }];
 
@@ -20,15 +21,27 @@ function copyName(name: string, names: Set<string>): string {
   return candidate;
 }
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
+export const loader = withPerfLoader("app.label-sizes", async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
-  const [sizes, templates, jobs, configuredDefault] = await Promise.all([
+  const [sizes, templates, jobUsageRows, configuredDefault] = await Promise.all([
     prisma.labelSize.findMany({ where: { shopId }, orderBy: [{ sequence: "asc" }, { name: "asc" }] }),
     prisma.labelTemplate.findMany({ where: { shopId }, select: { sizeId: true } }),
-    prisma.printJob.findMany({ where: { shopId }, select: { sizeSnap: true } }),
+    prisma.$queryRaw<Array<{ sizeId: string | null; count: bigint }>>`
+      SELECT CASE
+               WHEN (job."sizeSnap" ->> 'sizeId') IS NOT NULL THEN (job."sizeSnap" ->> 'sizeId')
+               ELSE size."id"
+             END AS "sizeId",
+             COUNT(*) AS count
+      FROM "PrintJob" job
+      LEFT JOIN "LabelSize" size
+        ON size."shopId" = job."shopId" AND size."name" = (job."sizeSnap" ->> 'name')
+      WHERE job."shopId" = ${shopId}
+      GROUP BY 1
+    `,
     getLabelDefault(shopId, "defaultLabelSizeId"),
   ]);
+  const jobCountBySize = new Map(jobUsageRows.filter((row) => row.sizeId !== null).map((row) => [row.sizeId!, Number(row.count)]));
   const defaultId = sizes.find((size) => size.id === configuredDefault && size.active)?.id
     ?? sizes.find((size) => size.active)?.id ?? null;
   const url = new URL(request.url);
@@ -37,10 +50,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return {
     sizes: sizes.map((size) => {
       const templateCount = templates.filter((template) => template.sizeId === size.id).length;
-      const jobCount = jobs.filter((job) => {
-        const snapshot = snapshotSize(job);
-        return snapshot.sizeId === size.id || (snapshot.sizeId == null && snapshot.name === size.name);
-      }).length;
+      const jobCount = jobCountBySize.get(size.id) ?? 0;
       return { ...size, templateCount, jobCount, usedByCount: templateCount + jobCount, isDefault: size.id === defaultId };
     }),
     editing: editing ? {
@@ -52,7 +62,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     creating: url.searchParams.get("new") === "1",
     defaultId,
   };
-};
+});
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);

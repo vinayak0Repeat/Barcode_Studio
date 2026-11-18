@@ -9,15 +9,16 @@ import { data, useFetcher, useLoaderData, useRevalidator, useSearchParams } from
 import { authenticate } from "../shopify.server";
 import generatorStyles from "../styles/generator-pages.css?url";
 import prisma from "../db.server";
-import { variantRows } from "../services/catalog/search.server";
+import { matchesQuery } from "../services/catalog/map.server";
+import { variantIndexRows, variantRowsByGid } from "../services/catalog/search.server";
 import {
   generateSkus,
   setSku,
 } from "../services/sku/engine.server";
-import { missingSkuCount } from "../services/sku/status.server";
 // Client-safe helper: MUST come from the shared module, not status.server
 // (React Router rejects ".server" imports referenced by client code).
 import { isSkuMissing } from "../services/sku/status.shared";
+import { withPerfLoader } from "../services/perf.server";
 
 export const meta: MetaFunction = () => [
   { title: "SKU Generator | Barcode Studio" },
@@ -50,7 +51,7 @@ function hideModal(id: string) {
   (document.getElementById(id) as PolarisActiveModalElement | null)?.hideOverlay();
 }
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
+export const loader = withPerfLoader("app.sku-generator", async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
   const url = new URL(request.url);
@@ -58,8 +59,25 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const filter = (url.searchParams.get("filter") ?? "all") as Filter;
   const page = Math.max(0, Number(url.searchParams.get("page") ?? "0") || 0);
 
-  const { rows } = await variantRows(shopId, { q, limit: 1000, offset: 0 });
-  const annotated = rows.map((row) => ({
+  const [indexRows, runningJob, lastJob] = await Promise.all([
+    variantIndexRows(shopId),
+    prisma.jobRun.findFirst({
+      where: { shopId, type: { in: ["barcode_generate", "barcode_resolve", "sku_generate"] }, status: "running" },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, type: true, progressDone: true, progressTotal: true },
+    }),
+    prisma.jobRun.findFirst({
+      where: { shopId, type: "sku_generate" },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, status: true, error: true },
+    }),
+  ]);
+  const annotated = indexRows.filter((row) => matchesQuery(q, {
+    productTitle: row.productTitle,
+    displayName: row.variantTitle,
+    sku: row.sku,
+    barcode: row.barcode,
+  })).map((row) => ({
     ...row,
     skuStatus: isSkuMissing(row.sku) ? ("missing" as const) : ("ready" as const),
   }));
@@ -73,21 +91,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // Missing count from the SAME shared helper as the dashboard tile and the
   // Missing SKUs report.
-  const [missingCount, totalVariants, runningJob, lastJob] = await Promise.all([
-    missingSkuCount(shopId),
-    prisma.cachedVariant.count({ where: { shopId } }),
-    prisma.jobRun.findFirst({
-      where: { shopId, type: { in: ["barcode_generate", "barcode_resolve", "sku_generate"] }, status: "running" },
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.jobRun.findFirst({
-      where: { shopId, type: "sku_generate" },
-      orderBy: { createdAt: "desc" },
-    }),
-  ]);
+  const missingCount = indexRows.filter((row) => row.status === "ACTIVE" && isSkuMissing(row.sku)).length;
+  const totalVariants = indexRows.length;
+  const visibleIndexRows = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const rows = await variantRowsByGid(shopId, visibleIndexRows.map((row) => row.variantGid), visibleIndexRows.map((row) => row.productGid));
+  const skuStatusByGid = new Map(filtered.map((row) => [row.variantGid, row.skuStatus]));
 
   return {
-    rows: filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
+    rows: rows.map((row) => ({ ...row, skuStatus: skuStatusByGid.get(row.variantGid) ?? "ready" })),
     matchingGids: filtered.map((r) => r.variantGid),
     matchingMissingGids: filtered.filter((r) => r.skuStatus === "missing").map((r) => r.variantGid),
     total: filtered.length,
@@ -105,7 +116,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       : null,
     lastJob: lastJob ? { id: lastJob.id, status: lastJob.status, error: lastJob.error } : null,
   };
-};
+});
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
@@ -249,6 +260,7 @@ export default function SkuGeneratorPage() {
             variant="primary"
             onClick={() => showModal(GENERATE_MODAL_ID)}
             accessibilityLabel="Generate SKUs for the selected variants without one"
+            {...(busy ? { loading: true } : {})}
             {...(busy || selectedMissing.length === 0 ? { disabled: true } : {})}
           >
             Generate SKUs{selectedMissing.length > 0 ? ` (${selectedMissing.length})` : ""}

@@ -13,14 +13,16 @@ import {
   saveSettings,
 } from "../services/settings.server";
 import { BARCODE_LENGTH_MAX, BARCODE_LENGTH_MIN, SKU_NUMBER_WIDTH_MAX, SKU_NUMBER_WIDTH_MIN } from "../services/settings.shared";
+import { withPerfLoader } from "../services/perf.server";
 import { WRITE_JOB_TYPES } from "../services/barcode/engine.server";
+import { invalidateDashboardSnapshot } from "../services/dashboard/cache.server";
 import adminStyles from "../styles/label-admin.css?url";
 
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: adminStyles }];
 
 export const meta: MetaFunction = () => [{ title: "Settings | Barcode Studio" }];
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
+export const loader = withPerfLoader("app.settings", async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
 
@@ -39,6 +41,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     prisma.jobRun.findFirst({
       where: { shopId, type: { in: WRITE_JOB_TYPES }, status: "running" },
       orderBy: { createdAt: "desc" },
+      select: { id: true, type: true },
     }),
   ]);
 
@@ -58,7 +61,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     sizes,
     runningJob: runningJob ? { id: runningJob.id, type: runningJob.type } : null,
   };
-};
+});
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -89,6 +92,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       { status: 400 },
     );
   }
+  invalidateDashboardSnapshot(session.shop);
   return data({
     ok: true,
     message:

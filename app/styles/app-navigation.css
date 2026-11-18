@@ -1,0 +1,61 @@
+.bs-route-content {
+  position: relative;
+  min-height: 100%;
+}
+
+.bs-route-content > :not(.bs-nav-progress) {
+  transition: opacity 180ms ease, filter 180ms ease;
+}
+
+.bs-nav-progress {
+  position: absolute;
+  z-index: 10;
+  inset: 0 0 auto;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.bs-nav-progress::after {
+  content: "";
+  display: block;
+  width: 38%;
+  height: 100%;
+  border-radius: 0 2px 2px 0;
+  background: linear-gradient(90deg, var(--bs-accent-ink), var(--bs-accent), var(--bs-bg-to));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--bs-accent) 45%, transparent);
+  animation: bs-nav-progress 1.1s cubic-bezier(.4, 0, .2, 1) infinite;
+}
+
+.bs-route-content[aria-busy="true"] > :not(.bs-nav-progress) {
+  opacity: .76;
+  filter: grayscale(.08);
+}
+
+.bs-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes bs-nav-progress {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(270%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bs-nav-progress::after {
+    width: 100%;
+    animation: none;
+  }
+
+  .bs-route-content > :not(.bs-nav-progress) {
+    transition: none;
+  }
+}

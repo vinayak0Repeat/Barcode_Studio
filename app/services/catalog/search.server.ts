@@ -182,6 +182,78 @@ export interface VariantRow {
   matched: boolean;
 }
 
+export interface VariantIndexRow {
+  variantGid: string;
+  productGid: string;
+  productTitle: string | null;
+  variantTitle: string | null;
+  sku: string | null;
+  barcode: string | null;
+  status: string | null;
+}
+
+/** Small index payload used for filtering/select-all; full display rows are fetched only for the current page. */
+export async function variantIndexRows(shopId: string): Promise<VariantIndexRow[]> {
+  const [products, variants] = await Promise.all([
+    prisma.cachedProduct.findMany({ where: { shopId }, select: { gid: true, title: true } }),
+    prisma.cachedVariant.findMany({
+      where: { shopId },
+      orderBy: { gid: "asc" },
+      select: { gid: true, productGid: true, title: true, sku: true, barcode: true, status: true },
+    }),
+  ]);
+  const productTitles = new Map(products.map((product) => [product.gid, product.title]));
+  return variants.map((variant) => ({
+    variantGid: variant.gid,
+    productGid: variant.productGid,
+    productTitle: productTitles.get(variant.productGid) ?? null,
+    variantTitle: variant.title,
+    sku: variant.sku,
+    barcode: variant.barcode,
+    status: variant.status,
+  }));
+}
+
+/** Fetch full display data only for the visible page of generator rows. */
+export async function variantRowsByGid(shopId: string, gids: string[], productGids: string[]): Promise<VariantRow[]> {
+  if (gids.length === 0) return [];
+  const [variants, products] = await Promise.all([
+    prisma.cachedVariant.findMany({
+      where: { shopId, gid: { in: gids } },
+      select: {
+        gid: true, productGid: true, title: true, sku: true, barcode: true,
+        price: true, inventoryQuantity: true,
+      },
+    }),
+    prisma.cachedProduct.findMany({
+      where: { shopId, gid: { in: [...new Set(productGids)] } },
+      select: { gid: true, title: true, productType: true, vendor: true, imageUrl: true },
+    }),
+  ]);
+  const productByGid = new Map(products.map((product) => [product.gid, product]));
+  const rowByGid = new Map(variants.map((variant) => {
+    const product = productByGid.get(variant.productGid);
+    return [variant.gid, {
+      variantGid: variant.gid,
+      productGid: variant.productGid,
+      productTitle: product?.title ?? null,
+      productType: product?.productType ?? null,
+      vendor: product?.vendor ?? null,
+      imageUrl: product?.imageUrl ?? null,
+      variantTitle: variant.title,
+      sku: variant.sku,
+      barcode: variant.barcode,
+      price: variant.price,
+      inventoryQuantity: variant.inventoryQuantity,
+      matched: false,
+    } satisfies VariantRow] as const;
+  }));
+  return gids.flatMap((gid) => {
+    const row = rowByGid.get(gid);
+    return row ? [row] : [];
+  });
+}
+
 /**
  * Flat variant table for the Generator page: one indexed query for variants
  * matching on their own fields, plus the products whose *title* matches (so

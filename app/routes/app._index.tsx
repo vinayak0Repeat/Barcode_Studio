@@ -5,9 +5,10 @@ import dashboardStyles from "../styles/dashboard.css?url";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { fullSync } from "../services/catalog/sync.server";
-import { gatherCoverage, writesEnabledFor } from "../services/reports/metrics.server";
-import { gatherDashboardMetrics, labelsPerDay } from "../services/dashboard/metrics.server";
+import { writesEnabledFor } from "../services/reports/metrics.server";
+import { getDashboardSnapshot } from "../services/dashboard/snapshot.server";
 import { BarChart, RadialProgress } from "../components/charts";
+import { withPerfLoader } from "../services/perf.server";
 
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: dashboardStyles }];
 export const meta: MetaFunction = () => [{ title: "Barcode Studio | Dashboard" }];
@@ -15,32 +16,32 @@ export const meta: MetaFunction = () => [{ title: "Barcode Studio | Dashboard" }
 const formatUtc = (date: Date) => new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", dateStyle: "medium", timeStyle: "short" }).format(date);
 const formatUtcDate = (date: Date) => new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", dateStyle: "medium" }).format(date);
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
+export const loader = withPerfLoader("app.dashboard", async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
   const now = new Date();
 
-  const [coverage, metrics, syncState, lastSyncJob, runningSyncJob, recentActivity, lastWriteJob, recentPrintJobs, perDay] =
+  const [snapshot, syncState, lastSyncJob, runningSyncJob, recentActivity, lastWriteJob, recentPrintJobs] =
     await Promise.all([
-      gatherCoverage(shopId),
-      gatherDashboardMetrics(shopId, now),
+      getDashboardSnapshot(shopId, now),
       prisma.syncState.findUnique({ where: { shopId } }),
-      prisma.jobRun.findFirst({ where: { shopId, type: "catalog_sync" }, orderBy: { createdAt: "desc" } }),
-      prisma.jobRun.findFirst({ where: { shopId, type: "catalog_sync", status: "running" } }),
-      prisma.activity.findMany({ where: { shopId }, orderBy: { at: "desc" }, take: 10 }),
-      prisma.jobRun.findFirst({ where: { shopId, type: { in: ["barcode_generate", "barcode_resolve"] } }, orderBy: { createdAt: "desc" } }),
+      prisma.jobRun.findFirst({ where: { shopId, type: "catalog_sync" }, orderBy: { createdAt: "desc" }, select: { id: true, status: true, error: true } }),
+      prisma.jobRun.findFirst({ where: { shopId, type: "catalog_sync", status: "running" }, select: { id: true } }),
+      prisma.$queryRaw<Array<{ id: string; type: string; jobId: string | null; jobName: string | null; productCount: number; labelCount: number; at: Date }>>`
+        SELECT a."id", a."type", a."jobId", p."name" AS "jobName", a."productCount", a."labelCount", a."at"
+        FROM "Activity" a
+        LEFT JOIN "PrintJob" p ON p."id" = a."jobId" AND p."shopId" = a."shopId"
+        WHERE a."shopId" = ${shopId}
+        ORDER BY a."at" DESC
+        LIMIT 10
+      `,
+      prisma.jobRun.findFirst({ where: { shopId, type: { in: ["barcode_generate", "barcode_resolve"] } }, orderBy: { createdAt: "desc" }, select: { id: true, status: true, error: true } }),
       prisma.printJob.findMany({
         where: { shopId }, orderBy: { printedAt: "desc" }, take: 5,
         select: { id: true, name: true, labelCount: true, printedAt: true },
       }),
-      labelsPerDay(shopId, 14, now),
     ]);
-
-  const activityJobIds = recentActivity.filter((row) => row.type === "printed" && row.jobId).map((row) => row.jobId!);
-  const activityJobs = activityJobIds.length
-    ? await prisma.printJob.findMany({ where: { shopId, id: { in: activityJobIds } }, select: { id: true, name: true } })
-    : [];
-  const jobNameById = new Map(activityJobs.map((job) => [job.id, job.name]));
+  const { coverage, metrics, perDay } = snapshot;
 
   return {
     shop: shopId,
@@ -58,14 +59,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     lastWriteJob: lastWriteJob ? { id: lastWriteJob.id, status: lastWriteJob.status, error: lastWriteJob.error } : null,
     writesEnabled: writesEnabledFor(shopId),
     recentActivity: recentActivity.map((row) => ({
-      id: row.id, type: row.type, jobName: row.jobId ? jobNameById.get(row.jobId) ?? null : null,
+      id: row.id, type: row.type, jobName: row.jobName,
       productCount: row.productCount, labelCount: row.labelCount, at: row.at.toISOString(), atLabel: formatUtc(row.at),
     })),
     recentPrintJobs: recentPrintJobs.map((job) => ({
       id: job.id, name: job.name, labelCount: job.labelCount, at: job.printedAt.toISOString(), atLabel: formatUtc(job.printedAt),
     })),
   };
-};
+});
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);

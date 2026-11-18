@@ -6,26 +6,30 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { clearLabelDefault, getLabelDefault, setLabelDefault } from "../services/labels/adminSettings.server";
 import { parseLabelTemplateInput } from "../services/labels/adminValidation.shared";
+import { withPerfLoader } from "../services/perf.server";
 
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: adminStyles }];
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
+export const loader = withPerfLoader("app.templates", async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
-  const [templates, sizes, jobs, configuredDefault] = await Promise.all([
+  const [templates, sizes, usageRows, configuredDefault] = await Promise.all([
     prisma.labelTemplate.findMany({ where: { shopId }, orderBy: [{ sequence: "asc" }, { name: "asc" }] }),
     prisma.labelSize.findMany({ where: { shopId }, orderBy: [{ sequence: "asc" }, { name: "asc" }] }),
-    prisma.printJob.findMany({ where: { shopId }, select: { templateId: true, labelTemplateId: true } }),
+    prisma.$queryRaw<Array<{ id: string; count: bigint }>>`
+      SELECT linked."templateId" AS id, COUNT(*) AS count
+      FROM (
+        SELECT "id", "templateId" FROM "PrintJob" WHERE "shopId" = ${shopId} AND "templateId" IS NOT NULL
+        UNION
+        SELECT "id", "labelTemplateId" AS "templateId" FROM "PrintJob" WHERE "shopId" = ${shopId} AND "labelTemplateId" IS NOT NULL
+      ) linked
+      GROUP BY linked."templateId"
+    `,
     getLabelDefault(shopId, "defaultTemplateId"),
   ]);
   const defaultId = templates.find((template) => template.id === configuredDefault && template.active)?.id
     ?? templates.find((template) => template.active)?.id ?? null;
-  const usage = new Map<string, number>();
-  for (const job of jobs) {
-    for (const id of new Set([job.templateId, job.labelTemplateId].filter((value): value is string => Boolean(value)))) {
-      usage.set(id, (usage.get(id) ?? 0) + 1);
-    }
-  }
+  const usage = new Map(usageRows.map((row) => [row.id, Number(row.count)]));
   const url = new URL(request.url);
   const editorId = url.searchParams.get("edit");
   const creating = url.searchParams.get("new") === "1";
@@ -45,7 +49,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     creating,
     defaultId,
   };
-};
+});
 
 function formRecord(form: FormData): Record<string, FormDataEntryValue> {
   return Object.fromEntries(form.entries());

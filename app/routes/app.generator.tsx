@@ -9,14 +9,16 @@ import { data, useFetcher, useLoaderData, useRevalidator, useSearchParams } from
 import { authenticate } from "../shopify.server";
 import generatorStyles from "../styles/generator-pages.css?url";
 import prisma from "../db.server";
-import { variantRows } from "../services/catalog/search.server";
-import { statusCounts, duplicateMap } from "../services/barcode/status.server";
+import { matchesQuery } from "../services/catalog/map.server";
+import { variantIndexRows, variantRowsByGid } from "../services/catalog/search.server";
+import { barcodeCatalogStats } from "../services/barcode/status.server";
 import {
   generateForVariants,
   getBarcodeConfig,
   setBarcode,
   validateAll,
 } from "../services/barcode/engine.server";
+import { withPerfLoader } from "../services/perf.server";
 
 export const meta: MetaFunction = () => [
   { title: "Barcode Generator | Barcode Studio" },
@@ -49,7 +51,7 @@ function hideModal(id: string) {
   (document.getElementById(id) as PolarisActiveModalElement | null)?.hideOverlay();
 }
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
+export const loader = withPerfLoader("app.generator", async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
   const url = new URL(request.url);
@@ -57,18 +59,31 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const filter = (url.searchParams.get("filter") ?? "all") as Filter;
   const page = Math.max(0, Number(url.searchParams.get("page") ?? "0") || 0);
 
-  const [duplicates, counts, config] = await Promise.all([
-    duplicateMap(shopId),
-    statusCounts(shopId),
+  const [indexRows, catalogStats, config, runningJob, lastJob] = await Promise.all([
+    variantIndexRows(shopId),
+    barcodeCatalogStats(shopId),
     getBarcodeConfig(shopId),
+    prisma.jobRun.findFirst({
+      where: { shopId, type: { in: ["barcode_generate", "barcode_resolve"] }, status: "running" },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, type: true, progressDone: true, progressTotal: true },
+    }),
+    prisma.jobRun.findFirst({
+      where: { shopId, type: { in: ["barcode_generate", "barcode_resolve"] } },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, status: true, error: true },
+    }),
   ]);
-
-  const { rows } = await variantRows(shopId, { q, limit: 1000, offset: 0 });
-  const annotated = rows.map((row) => ({
+  const annotated = indexRows.filter((row) => matchesQuery(q, {
+    productTitle: row.productTitle,
+    displayName: row.variantTitle,
+    sku: row.sku,
+    barcode: row.barcode,
+  })).map((row) => ({
     ...row,
     status: !row.barcode
       ? ("missing" as const)
-      : duplicates.has(row.barcode)
+      : catalogStats.duplicates.has(row.barcode)
         ? ("duplicate" as const)
         : ("ready" as const),
   }));
@@ -82,19 +97,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           ? annotated.filter((r) => r.status !== "missing")
           : annotated.filter((r) => r.status === "duplicate");
 
-  const [runningJob, lastJob] = await Promise.all([
-    prisma.jobRun.findFirst({
-      where: { shopId, type: { in: ["barcode_generate", "barcode_resolve"] }, status: "running" },
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.jobRun.findFirst({
-      where: { shopId, type: { in: ["barcode_generate", "barcode_resolve"] } },
-      orderBy: { createdAt: "desc" },
-    }),
-  ]);
+  const visibleIndexRows = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const rows = await variantRowsByGid(shopId, visibleIndexRows.map((row) => row.variantGid), visibleIndexRows.map((row) => row.productGid));
+  const statusByGid = new Map(filtered.map((row) => [row.variantGid, row.status]));
 
   return {
-    rows: filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
+    rows: rows.map((row) => ({ ...row, status: statusByGid.get(row.variantGid) ?? "ready" })),
     matchingGids: filtered.map((r) => r.variantGid),
     matchingMissingGids: filtered.filter((r) => r.status === "missing").map((r) => r.variantGid),
     total: filtered.length,
@@ -102,7 +110,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     pageCount: Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)),
     q,
     filter,
-    counts,
+    counts: catalogStats.counts,
     barcodeType: config.type,
     barcodeLength: config.length,
     runningJob: runningJob
@@ -110,7 +118,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       : null,
     lastJob: lastJob ? { id: lastJob.id, status: lastJob.status, error: lastJob.error } : null,
   };
-};
+});
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
@@ -317,6 +325,7 @@ export default function GeneratorPage() {
                 ? "Select variants without a barcode"
                 : `Generate barcodes for ${selectedMissing.length} variants`
             }
+            {...(busy ? { loading: true } : {})}
             {...(busy || selectedMissing.length === 0 ? { disabled: true } : {})}
           >
             Generate barcodes{selectedMissing.length > 0 ? ` (${selectedMissing.length})` : ""}
