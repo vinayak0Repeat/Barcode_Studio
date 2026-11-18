@@ -54,6 +54,7 @@ function closePrintContext() {
 export default function PrintJobPage() {
   const page = useLoaderData<typeof loader>();
   const printContent = useRef<HTMLDivElement>(null);
+  const printStarted = useRef(false);
 
   const schedulePrint = () => {
     let secondFrame = 0;
@@ -61,6 +62,7 @@ export default function PrintJobPage() {
       secondFrame = window.requestAnimationFrame(() => {
         const svgNodes = printContent.current?.querySelectorAll("svg");
         if (!printContent.current || [...(svgNodes ?? [])].some((svg) => !svg.isConnected)) return;
+        printStarted.current = true;
         window.print();
       });
     });
@@ -72,11 +74,22 @@ export default function PrintJobPage() {
 
   useEffect(() => {
     if ("linkExpired" in page || !printContent.current) return;
-    window.addEventListener("afterprint", closePrintContext);
+    let closeTimer: number | undefined;
+    const closeAfterDialog = () => {
+      if (!printStarted.current) return;
+      if (closeTimer !== undefined) window.clearTimeout(closeTimer);
+      // Chrome can return focus without reliably dispatching afterprint in
+      // some print-preview flows. Both signals close only this print popup.
+      closeTimer = window.setTimeout(closePrintContext, 250);
+    };
+    window.addEventListener("afterprint", closeAfterDialog);
+    window.addEventListener("focus", closeAfterDialog);
     const cancelPrint = schedulePrint();
     return () => {
       cancelPrint();
-      window.removeEventListener("afterprint", closePrintContext);
+      if (closeTimer !== undefined) window.clearTimeout(closeTimer);
+      window.removeEventListener("afterprint", closeAfterDialog);
+      window.removeEventListener("focus", closeAfterDialog);
     };
   }, [page]);
 

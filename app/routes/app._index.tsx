@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import type { ActionFunctionArgs, LinksFunction, LoaderFunctionArgs, MetaFunction } from "react-router";
-import { data, useFetcher, useLoaderData, useRevalidator } from "react-router";
+import { data, Link, useFetcher, useLoaderData, useRevalidator } from "react-router";
 import dashboardStyles from "../styles/dashboard.css?url";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
@@ -136,7 +136,7 @@ export default function Index() {
             </p>
             <div className="bs-segment-bar" aria-label="Barcode status split">
               {statusRows.slice(0, 3).map((row) => (
-                <a key={row.name} className={`bs-segment bs-segment-${row.name.toLowerCase()}`} href={row.href} aria-label={`${row.name}: ${row.count}`}>
+                <Link key={row.name} className={`bs-segment bs-segment-${row.name.toLowerCase()}`} to={row.href} aria-label={`${row.name}: ${row.count}`}>
                   <span className="bs-segment-label">
                     <span className="bs-segment-name">{row.name}</span>
                     <span className="bs-segment-pct">
@@ -149,7 +149,7 @@ export default function Index() {
                   <span className="bs-segment-track" aria-hidden="true">
                     <span style={{ width: `${Math.round((100 * row.count) / totalForPct)}%` }} />
                   </span>
-                </a>
+                </Link>
               ))}
             </div>
           </div>
@@ -197,14 +197,14 @@ export default function Index() {
             <div className="bs-card-title"><h3>Variants by status</h3><span className="bs-card-sub">active only</span></div>
             <div className="bs-status-rows">
               {statusRows.map((row) => (
-                <a key={row.name} className="bs-status-row" href={row.href} aria-label={`${row.name}: ${row.count}`}>
+                <Link key={row.name} className="bs-status-row" to={row.href} aria-label={`${row.name}: ${row.count}`}>
                   <span className="bs-status-label">{row.name}</span>
                   <span className="bs-status-track">
                     <span className="bs-status-bar" style={{ width: `${Math.round((100 * row.count) / totalForPct)}%`, background: row.color }} />
                   </span>
                   <span className="bs-status-pct bs-num">{Math.round((100 * row.count) / totalForPct)}%</span>
                   <span className="bs-status-count bs-num">{row.count.toLocaleString()}</span>
-                </a>
+                </Link>
               ))}
             </div>
           </article>
@@ -242,32 +242,32 @@ export default function Index() {
             ) : (
               <div className="bs-attention-rows">
                 {missingCount > 0 && (
-                  <a className="bs-attention-row" href="/app/generator?filter=missing">
+                  <Link className="bs-attention-row" to="/app/generator?filter=missing">
                     <span className="bs-attention-chip bs-attention-chip-amber" aria-hidden="true">!</span>
                     <span className="bs-attention-text"><span className="bs-attention-label">Missing barcodes</span><span className="bs-attention-sub">active variants without a barcode</span></span>
                     <b className="bs-attention-count-badge bs-num">{missingCount.toLocaleString()}</b>
-                  </a>
+                  </Link>
                 )}
                 {duplicateCount > 0 && (
-                  <a className="bs-attention-row" href="/app/generator/duplicates">
+                  <Link className="bs-attention-row" to="/app/generator/duplicates">
                     <span className="bs-attention-chip bs-attention-chip-red" aria-hidden="true">≠</span>
                     <span className="bs-attention-text"><span className="bs-attention-label">Duplicate barcodes</span><span className="bs-attention-sub">{coverage.duplicateGroups} shared value(s)</span></span>
                     <b className="bs-attention-count-badge bs-num">{duplicateCount.toLocaleString()}</b>
-                  </a>
+                  </Link>
                 )}
                 {coverage.invalid > 0 && (
-                  <a className="bs-attention-row" href="/app/reports?tab=invalid">
+                  <Link className="bs-attention-row" to="/app/reports?tab=invalid">
                     <span className="bs-attention-chip bs-attention-chip-red" aria-hidden="true">✕</span>
                     <span className="bs-attention-text"><span className="bs-attention-label">Invalid barcodes</span><span className="bs-attention-sub">failed validation</span></span>
                     <b className="bs-attention-count-badge bs-num">{coverage.invalid.toLocaleString()}</b>
-                  </a>
+                  </Link>
                 )}
                 {metrics.missingSkuCount > 0 && (
-                  <a className="bs-attention-row" href="/app/sku-generator?filter=missing">
+                  <Link className="bs-attention-row" to="/app/sku-generator?filter=missing">
                     <span className="bs-attention-chip bs-attention-chip-amber" aria-hidden="true">#</span>
                     <span className="bs-attention-text"><span className="bs-attention-label">Missing SKUs</span><span className="bs-attention-sub">variants without a SKU</span></span>
                     <b className="bs-attention-count-badge bs-num">{metrics.missingSkuCount.toLocaleString()}</b>
-                  </a>
+                  </Link>
                 )}
               </div>
             )}
@@ -275,7 +275,7 @@ export default function Index() {
 
           {/* Recent activity */}
           <article className="bs-card bs-bento-updates" aria-label="Recent activity">
-            <div className="bs-card-title"><h3>Recent activity</h3><a className="bs-card-sub" href="/app/print-history">View print history</a></div>
+            <div className="bs-card-title"><h3>Recent activity</h3><Link className="bs-card-sub" to="/app/print-history">View print history</Link></div>
             {page.recentActivity.length === 0 ? (
               <div className="bs-empty"><span className="bs-empty-icon" aria-hidden="true">◷</span><b className="bs-empty-title">No recent activity</b><p className="bs-empty-note">Generate barcodes or print labels to see activity here.</p></div>
             ) : (
@@ -290,12 +290,12 @@ export default function Index() {
 
           {/* Recent print jobs */}
           <article className="bs-card bs-bento-jobs" aria-label="Recent print jobs">
-            <div className="bs-card-title"><h3>Recent print jobs</h3><a className="bs-card-sub" href="/app/print-history">View all</a></div>
+            <div className="bs-card-title"><h3>Recent print jobs</h3><Link className="bs-card-sub" to="/app/print-history">View all</Link></div>
             {page.recentPrintJobs.length === 0 ? (
               <div className="bs-empty"><span className="bs-empty-icon" aria-hidden="true">▤</span><b className="bs-empty-title">No print jobs yet</b><p className="bs-empty-note">Your recent label jobs will appear here.</p></div>
             ) : (
               <ul className="bs-job-list">
-                {page.recentPrintJobs.map((job) => <li key={job.id}><a href={`/app/print-history/${job.id}`} aria-label={`View print job ${job.name}, ${job.labelCount} labels`}><span><b>{job.name}</b><small>{job.labelCount} labels</small></span><time dateTime={job.at} title={job.atLabel}>{job.atLabel}</time></a></li>)}
+                {page.recentPrintJobs.map((job) => <li key={job.id}><Link to={`/app/print-history/${job.id}`} aria-label={`View print job ${job.name}, ${job.labelCount} labels`}><span><b>{job.name}</b><small>{job.labelCount} labels</small></span><time dateTime={job.at} title={job.atLabel}>{job.atLabel}</time></Link></li>)}
               </ul>
             )}
           </article>
