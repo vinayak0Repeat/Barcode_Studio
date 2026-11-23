@@ -31,6 +31,7 @@ const variant: ShopifyVariantNode = {
   price: "19.99",
   compareAtPrice: "24.99",
   inventoryQuantity: 7,
+  inventoryItem: null,
   selectedOptions: [
     { name: "Size", value: "Small" },
     { name: "Color", value: "Red" },

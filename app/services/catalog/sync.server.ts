@@ -15,6 +15,7 @@ import {
   type ShopifyProductNode,
   type ShopifyVariantNode,
 } from "./map.server";
+import { hydrateInventoryLevels } from "./inventoryLevels.server";
 
 const SYNC_JOB_TYPE = "catalog_sync";
 /** How many products to accumulate before writing to the database. */
@@ -78,8 +79,10 @@ async function fetchAllVariants(
 interface SyncRun {
   seenProductIds: Set<string>;
   seenVariantIds: Set<string>;
+  seenLevelIds: Set<string>;
   productCount: number;
   variantCount: number;
+  inventoryLevelErrors: string[];
 }
 
 async function runSync(
@@ -92,8 +95,10 @@ async function runSync(
   const run: SyncRun = {
     seenProductIds: new Set(),
     seenVariantIds: new Set(),
+    seenLevelIds: new Set(),
     productCount: 0,
     variantCount: 0,
+    inventoryLevelErrors: [],
   };
 
   let productBuffer: ShopifyProductNode[] = [];
@@ -112,6 +117,11 @@ async function runSync(
         variants: await fetchAllVariants(admin, product),
       });
     }
+    const inventoryHydration = await hydrateInventoryLevels(
+      admin,
+      withAllVariants.flatMap(({ variants }) => variants),
+    );
+    run.inventoryLevelErrors.push(...inventoryHydration.errors);
 
     // Bulk upsert via raw SQL (one statement per ~100 rows): interactive
     // transactions time out on remote databases (Neon) because per-row
@@ -171,6 +181,49 @@ async function runSync(
       `;
     }
 
+    // Per-location levels were loaded in bounded nodes(ids:) queries above;
+    // the write path still re-reads the live truth before every mutation.
+    // Replace-per-variant keeps rows fresh without per-row upserts.
+    const levelRows = withAllVariants.flatMap(({ variants }) =>
+      variants.flatMap((variant) => {
+        if (!inventoryHydration.hydratedVariantGids.has(variant.id)) return [];
+        const item = variant.inventoryItem;
+        if (!item) return [];
+        return item.inventoryLevels.nodes.flatMap((level) => {
+          if (!level.location) return [];
+          const id = `${shopDomain}:${item.id}:${level.location.id}`;
+          run.seenLevelIds.add(id);
+          return [{
+            id,
+            shopId: shopDomain,
+            variantGid: variant.id,
+            inventoryItemGid: item.id,
+            locationGid: level.location.id,
+            locationName: level.location.name,
+            locationActive: level.location.isActive,
+            available: Math.trunc(level.available ?? 0),
+            updatedAt: new Date(),
+          }];
+        });
+      }),
+    );
+    const flushedVariantGids = withAllVariants.flatMap(({ variants }) =>
+      variants
+        .filter((variant) => inventoryHydration.hydratedVariantGids.has(variant.id))
+        .map((variant) => variant.id),
+    );
+    if (flushedVariantGids.length > 0) {
+      await prisma.cachedInventoryLevel.deleteMany({
+        where: { shopId: shopDomain, variantGid: { in: flushedVariantGids } },
+      });
+    }
+    for (const batch of chunk(levelRows, SQL_BATCH_SIZE)) {
+      await prisma.cachedInventoryLevel.createMany({
+        data: batch,
+        skipDuplicates: true,
+      });
+    }
+
     for (const { product, variants } of withAllVariants) {
       const mappedProduct = mapProduct(shopDomain, product);
       run.seenProductIds.add(mappedProduct.id);
@@ -180,8 +233,20 @@ async function runSync(
       }
       run.variantCount += variants.length;
 
-      // Remove variants of this product that no longer exist on it.
+      // Remove inventory rows and variants that Shopify no longer reports.
+      // Levels have no FK to CachedVariant, so delete them explicitly first.
       if (variants.length > 0) {
+        const existing = await prisma.cachedVariant.findMany({
+          where: { shopId: shopDomain, productGid: product.id },
+          select: { gid: true },
+        });
+        const liveGids = new Set(variants.map((variant) => variant.id));
+        const removedGids = existing.map((row) => row.gid).filter((gid) => !liveGids.has(gid));
+        if (removedGids.length > 0) {
+          await prisma.cachedInventoryLevel.deleteMany({
+            where: { shopId: shopDomain, variantGid: { in: removedGids } },
+          });
+        }
         await prisma.cachedVariant.deleteMany({
           where: {
             shopId: shopDomain,
@@ -232,11 +297,35 @@ async function deleteStale(shopDomain: string, run: SyncRun) {
     shopDomain,
     [...run.seenVariantIds],
   );
+  if (run.inventoryLevelErrors.length === 0) {
+    await deleteNotSeen(
+      prisma.cachedInventoryLevel,
+      shopDomain,
+      [...run.seenLevelIds],
+    );
+  } else {
+    // Preserve existing levels for variants whose read failed, but still
+    // prune levels belonging to variants removed from the catalog.
+    await prisma.$executeRaw`
+      DELETE FROM "CachedInventoryLevel" AS level
+      WHERE level."shopId" = ${shopDomain}
+        AND NOT EXISTS (
+          SELECT 1 FROM "CachedVariant" AS variant
+          WHERE variant."shopId" = level."shopId"
+            AND variant."gid" = level."variantGid"
+        )
+    `;
+  }
   await deleteNotSeen(
     prisma.cachedProduct,
     shopDomain,
     [...run.seenProductIds],
   );
+}
+
+function inventoryLevelWarning(run: SyncRun): string | null {
+  if (run.inventoryLevelErrors.length === 0) return null;
+  return `${run.inventoryLevelErrors.length} inventory-level batch(es) could not be refreshed. ${run.inventoryLevelErrors[0]}`;
 }
 
 /**
@@ -317,6 +406,10 @@ export async function fullSync(
     });
 
     await deleteStale(shopDomain, run);
+    const inventoryWarning = inventoryLevelWarning(run);
+    if (inventoryWarning) {
+      console.error(`Catalog sync completed with inventory-level errors for ${shopDomain}: ${inventoryWarning}`);
+    }
 
     await prisma.$transaction([
       prisma.jobRun.update({
@@ -325,9 +418,11 @@ export async function fullSync(
           status: "done",
           progressDone: run.variantCount,
           progressTotal: run.variantCount,
+          ...(inventoryWarning ? { error: inventoryWarning } : {}),
           result: {
             products: run.productCount,
             variants: run.variantCount,
+            ...(inventoryWarning ? { inventoryLevelsWarning: inventoryWarning } : {}),
           } as object,
         },
       }),
@@ -380,6 +475,10 @@ export async function syncSince(
         });
       },
     );
+    const inventoryWarning = inventoryLevelWarning(run);
+    if (inventoryWarning) {
+      console.error(`Catalog sync completed with inventory-level errors for ${shopDomain}: ${inventoryWarning}`);
+    }
 
     await prisma.$transaction([
       prisma.jobRun.update({
@@ -388,10 +487,12 @@ export async function syncSince(
           status: "done",
           progressDone: run.variantCount,
           progressTotal: run.variantCount,
+          ...(inventoryWarning ? { error: inventoryWarning } : {}),
           result: {
             products: run.productCount,
             variants: run.variantCount,
             delta: true,
+            ...(inventoryWarning ? { inventoryLevelsWarning: inventoryWarning } : {}),
           } as object,
         },
       }),

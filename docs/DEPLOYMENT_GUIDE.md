@@ -158,6 +158,7 @@ autosuspend adds cold-start latency on the first request after idle.
 | `SHOPIFY_APP_URL` | no | `https://<railway-domain>` | OAuth callbacks |
 | `ALLOW_SHOPIFY_WRITES` | no | `"false"` for read-only phase, `"true"` later | Global write kill switch |
 | `WRITE_ALLOWED_SHOPS` | no | shop domains, comma separated | Per-shop write allowlist (empty = no writes anywhere) |
+| `ALLOW_INVENTORY_WRITES` | no | `"true"` only when stock editing is approved | Inventory writes (Print Labels stock cell) are OFF unless this is exactly `"true"` AND the shop is allowlisted; needs the `write_inventory` scope (merchant re-approval) |
 | `NODE_ENV` | no | `"production"` (Dockerfile sets it) | Prisma client singleton |
 | `PORT` | no | Railway injects it | Server listen |
 | `ENABLE_VARIANT_METAFIELD_DEFINITIONS` | no | leave unset for client store | PS/Valor metafields out of scope |
@@ -188,7 +189,9 @@ domain before install.
    `shopify app config link --help`) to generate `shopify.app.production.toml`.
 2. Set in the toml/dashboard: `application_url` = Railway domain;
    `redirect_urls` = `https://<domain>/api/auth`; scopes stay exactly
-   `read_products,write_products,read_inventory`; webhooks as in the current
+   `read_products,write_products,read_inventory,write_inventory`
+   (`write_inventory` powers the Print Labels stock editing; adding it
+   requires merchant re-approval of the app); webhooks as in the current
    toml (9 subscriptions incl. the 3 compliance topics).
 3. **What**: run `shopify app deploy`. **Why**: pushes config + creates an app
    **version** you can release (source: `shopify app deploy` in

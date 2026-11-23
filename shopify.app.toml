@@ -7,7 +7,7 @@ name = "Barcode Studio"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_products,write_products,read_inventory"
+scopes = "read_products,write_products,read_inventory,write_inventory"
 
 # NOTE: the Shopify CLI used here rejects the declarative [product_variant.metafields.app.*]
 # sections ("Unsupported section(s): product_variant"). These definitions are instead

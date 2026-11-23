@@ -86,6 +86,7 @@ function activityLabel(row: { type: string; jobName: string | null; productCount
   if (row.type === "printed") return `Printed labels ${row.jobName ?? ""}, ${row.labelCount} labels`;
   if (row.type === "generated") return `Generated ${row.labelCount || row.productCount} barcodes`;
   if (row.type === "resolved") return `Resolved ${row.labelCount || row.productCount} duplicates`;
+  if (row.type === "stock_set") return "Updated inventory stock";
   if (row.type === "edited") return `Edited ${row.labelCount || 1} barcode(s)`;
   return `${row.type.replaceAll("_", " ")} · ${row.labelCount} barcode(s)`;
 }
@@ -110,6 +111,7 @@ export default function Index() {
   const readyCount = Math.max(0, coverage.totalActiveVariants - missingCount - duplicateCount);
   const coveragePct = coverage.coveragePercent;
   const syncFailed = page.lastSyncJob?.status === "failed";
+  const syncWarning = page.lastSyncJob?.status === "done" && page.lastSyncJob.error != null;
   const perDayBars = page.perDay.map((point) => ({
     label: point.day.slice(-2),
     value: point.labelCount,
@@ -302,9 +304,10 @@ export default function Index() {
 
           {/* Catalog sync + write status footer */}
           {syncFailed && <div className="bs-bento-sync"><s-banner tone="critical">Catalog sync failed: {page.lastSyncJob?.error ?? "See the last sync job for details."}</s-banner></div>}
+          {syncWarning && <div className="bs-bento-sync"><s-banner tone="warning">Products and variants synced, but inventory levels could not be fully refreshed: {page.lastSyncJob?.error}</s-banner></div>}
           <footer className="bs-card bs-footer bs-bento-sync">
             <section className="bs-footer-section" aria-labelledby="bs-sync-heading">
-              <div className="bs-footer-title"><h2 id="bs-sync-heading">Catalog sync</h2><s-badge tone={page.syncRunning ? "caution" : syncFailed ? "critical" : page.lastSyncJob ? "success" : "neutral"}>{page.syncRunning ? "Syncing" : syncFailed ? "Failed" : page.lastSyncJob ? "Done" : "Never run"}</s-badge></div>
+              <div className="bs-footer-title"><h2 id="bs-sync-heading">Catalog sync</h2><s-badge tone={page.syncRunning ? "caution" : syncFailed ? "critical" : syncWarning ? "warning" : page.lastSyncJob ? "success" : "neutral"}>{page.syncRunning ? "Syncing" : syncFailed ? "Failed" : syncWarning ? "Done with warnings" : page.lastSyncJob ? "Done" : "Never run"}</s-badge></div>
               <p>{metrics.productCount.toLocaleString()} products · {metrics.variantCount.toLocaleString()} variants in cache</p>
               <p>Last sync: {page.lastFullSyncAtLabel ?? formatDate(page.lastFullSyncAt)}</p>
               {syncFailed && page.lastSyncJob?.error && <p className="bs-error-text">{page.lastSyncJob.error}</p>}

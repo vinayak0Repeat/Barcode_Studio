@@ -279,18 +279,29 @@ s-page input.bs-print-search[type="search"] { padding-left: 44px !important; }
 .bs-product-card > .bs-product-expand:focus-visible { outline: var(--bs-focus); outline-offset: 1px; }
 
 .bs-variant-list { min-width: 0; margin: 0; overflow-x: auto; border: 0; border-radius: 0; background: color-mix(in srgb, var(--bs-print-text) 2.5%, var(--bs-print-bg)); }
+/*
+ * Variant table grid — shared by header and rows. Fixed minimum content
+ * (~764px incl. gaps) fits the product column without horizontal scroll at
+ * 1400px AND 900px viewports; below 900px the rows get a min-width and the
+ * CONTAINER (.bs-variant-list) is the only thing that scrolls.
+ * Columns: [checkbox] [variant] [SKU] [barcode] [price] [stock] [status] [qty]
+ */
+.bs-variant-head,
+.bs-variant-card {
+  grid-template-columns: 24px minmax(120px, 1.4fr) minmax(0, 1fr) minmax(150px, 1.6fr) 80px 90px 100px 130px;
+  min-width: 0;
+}
 .bs-variant-head {
-  display: grid; grid-template-columns: 24px minmax(120px, 1.1fr) minmax(90px, .7fr) minmax(160px, 1.2fr) minmax(70px, auto) minmax(65px, auto) minmax(100px, auto) minmax(112px, auto);
-  gap: 10px; align-items: center; min-width: 900px; padding: 8px 12px;
+  display: grid;
+  gap: 10px; align-items: center; padding: 8px 12px;
   color: var(--bs-print-muted); background: color-mix(in srgb, var(--bs-print-text) 3%, var(--bs-print-bg));
   border-top: 1px solid var(--bs-print-border); border-bottom: 1px solid var(--bs-print-border); font-size: 10px;
 }
+.bs-variant-head > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bs-variant-card {
   display: grid;
-  grid-template-columns: 24px minmax(120px, 1.1fr) minmax(90px, .7fr) minmax(160px, 1.2fr) minmax(70px, auto) minmax(65px, auto) minmax(100px, auto) minmax(112px, auto);
   gap: 10px;
   align-items: center;
-  min-width: 900px;
   box-sizing: border-box;
   padding: 10px 12px;
   color: var(--bs-print-text);
@@ -304,10 +315,39 @@ s-page input.bs-print-search[type="search"] { padding-left: 44px !important; }
 .bs-variant-name { font-weight: 550; }
 .bs-variant-sku { color: var(--bs-print-muted); font-size: 12px; }
 .bs-variant-card > label { display: grid; gap: 3px; min-width: 0; color: var(--bs-print-muted); font-size: 11px; }
+/* Caption row: "Barcode" text and the "Add barcode" link share ONE line so
+   the cell never grows taller than caption + input. */
+.bs-barcode-caption { display: flex; align-items: baseline; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; }
+.bs-barcode-caption a { flex: 0 0 auto; }
 .bs-variant-card > label input { width: 100%; min-width: 0; height: 32px; box-sizing: border-box; padding: 5px 7px; color: var(--bs-print-text); background: var(--bs-print-bg); border: 1px solid var(--bs-print-border); border-radius: 6px; font: inherit; font-size: 12px; }
 .bs-variant-card > label input:focus-visible { outline: var(--bs-focus); outline-offset: 1px; }
 .bs-variant-card > label a { white-space: nowrap; }
 .bs-variant-status { display: flex; align-items: center; gap: 6px; min-width: max-content; white-space: nowrap; }
+/* Inline editable stock cell (expanded variant rows only). */
+.bs-stock-cell { position: relative; display: inline-flex; align-items: center; justify-content: flex-end; min-width: 0; }
+.bs-stock-undo { flex: 0 0 auto; padding: 2px; color: var(--bs-accent); background: transparent; border: 0; font: inherit; font-size: 11px; text-decoration: underline; cursor: pointer; }
+.bs-stock-input {
+  width: 100%; min-width: 0; height: 30px; box-sizing: border-box; padding: 4px 6px;
+  color: var(--bs-print-text); background: var(--bs-print-bg);
+  border: 1px solid var(--bs-print-border); border-radius: 6px;
+  font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; text-align: right;
+  transition: border-color .15s ease;
+}
+.bs-stock-input:focus-visible { outline: var(--bs-focus); outline-offset: 1px; border-color: color-mix(in srgb, var(--bs-print-text) 24%, var(--bs-print-border)); }
+.bs-stock-input:disabled { opacity: .6; }
+.bs-stock-input::-webkit-outer-spin-button,
+.bs-stock-input::-webkit-inner-spin-button { appearance: none; margin: 0; }
+.bs-stock-input { appearance: textfield; }
+/* Tiny in-cell spinner while the guarded write runs. */
+.bs-stock-spinner {
+  position: absolute; right: 6px; width: 12px; height: 12px; box-sizing: border-box;
+  border: 2px solid color-mix(in srgb, var(--bs-print-text) 18%, transparent);
+  border-top-color: var(--bs-print-text);
+  border-radius: 50%;
+  animation: bs-stock-spin .7s linear infinite;
+  pointer-events: none;
+}
+@keyframes bs-stock-spin { to { transform: rotate(360deg); } }
 .bs-row-banner { grid-column: 1 / -1; min-width: 0; }
 .bs-row-banner s-banner { display: block; }
 .bs-qty-controls { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
@@ -367,6 +407,10 @@ s-page input.bs-print-search[type="search"] { padding-left: 44px !important; }
   .bs-product-table-head { font-size: 10px; padding-inline: 10px; }
   .bs-product-card { padding-inline: 10px; }
   .bs-print-action-group + .bs-print-action-group { margin-left: 0; }
+  /* Below 900px the variant table's fixed minimum no longer fits the page:
+     keep the rows at their minimum width and scroll INSIDE the container. */
+  .bs-variant-head,
+  .bs-variant-card { min-width: 800px; }
 }
 @media (max-width: 600px) {
   s-page:has(.bs-print-layout) { padding: 14px 12px 32px; }
@@ -394,7 +438,7 @@ s-page input.bs-print-search[type="search"] { padding-left: 44px !important; }
   .bs-product-card > .bs-product-expand { grid-column: 4; grid-row: 2; }
   .bs-variant-head { display: none; }
   .bs-variant-list { overflow-x: auto; }
-  .bs-variant-card { min-width: 900px; }
+  .bs-variant-card { min-width: 800px; }
   .bs-preview-panel { padding: 15px; }
   .bs-sticky-printbar { width: calc(100% - 16px); padding: 9px 12px; gap: 7px; }
 }

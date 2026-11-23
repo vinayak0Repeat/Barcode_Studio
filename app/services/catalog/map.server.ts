@@ -12,6 +12,16 @@ export interface ShopifyVariantNode {
   price: string | null;
   compareAtPrice: string | null;
   inventoryQuantity: number | null;
+  /** Per-location available quantities (Print Labels stock editing). */
+  inventoryItem: {
+    id: string;
+    inventoryLevels: {
+      nodes: Array<{
+        available: number | null;
+        location: { id: string; name: string | null; isActive: boolean } | null;
+      }>;
+    };
+  } | null;
   selectedOptions: Array<{ name: string; value: string }> | null;
   position: number;
   createdAt: string;

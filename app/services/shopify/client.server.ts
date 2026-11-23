@@ -69,6 +69,34 @@ function throttledStatus(body: GraphQLBody): ThrottleStatus | undefined {
     : undefined;
 }
 
+function graphQLErrorsFromThrown(error: unknown): Array<{ message?: string; extensions?: { code?: string } }> {
+  const body = (error as { body?: { errors?: unknown } } | null)?.body;
+  const errors = body?.errors as
+    | { graphQLErrors?: Array<{ message?: string; extensions?: { code?: string } }> }
+    | Array<{ message?: string; extensions?: { code?: string } }>
+    | undefined;
+  if (Array.isArray(errors)) return errors;
+  return errors?.graphQLErrors ?? [];
+}
+
+function thrownHttpStatus(error: unknown): number | undefined {
+  const typed = error as { status?: unknown; response?: { status?: unknown; code?: unknown } } | null;
+  const status = typed?.response?.status ?? typed?.response?.code ?? typed?.status;
+  return typeof status === "number" ? status : undefined;
+}
+
+function formatGraphQLErrors(errors: Array<{ message: string }>): string {
+  return [...new Set(errors.map((error) => error.message))].join("; ");
+}
+
+function isNetworkFailure(error: unknown): boolean {
+  if (error instanceof TypeError) return true;
+  const typed = error as { name?: string; code?: string } | null;
+  if (typed?.name === "HttpRequestError" || typed?.name === "FetchError") return true;
+  return ["ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "ENOTFOUND", "ECONNREFUSED", "UND_ERR_CONNECT_TIMEOUT"]
+    .includes(typed?.code ?? "");
+}
+
 /**
  * Core executor. `send` must perform one GraphQL request and return the raw
  * Response (so this is testable with fakes, no network).
@@ -90,6 +118,74 @@ export async function executeWithRetry<TData>(
     try {
       response = await send();
     } catch (error) {
+      const graphQLErrors = graphQLErrorsFromThrown(error);
+      if (graphQLErrors.length > 0) {
+        const isThrottled = graphQLErrors.some(
+          (graphQLError) => graphQLError.extensions?.code === "THROTTLED",
+        );
+        if (isThrottled) {
+          const body = (error as { body?: GraphQLBody }).body;
+          lastThrottle = body?.extensions?.cost?.throttleStatus;
+          if (body?.extensions?.cost?.requestedQueryCost) {
+            nextCost = body.extensions.cost.requestedQueryCost;
+          }
+          if (attempt === MAX_ATTEMPTS) {
+            throw new ShopifyGraphQLRequestError(
+              "GraphQL request still THROTTLED after retries",
+              error,
+            );
+          }
+          if (!lastThrottle) await sleep(backoffDelayMs(attempt));
+          continue;
+        }
+        throw new ShopifyGraphQLRequestError(
+          [...new Set(graphQLErrors.map((graphQLError) => graphQLError.message ?? "GraphQL operation failed"))].join("; "),
+          error,
+        );
+      }
+
+      const errorName = (error as { name?: string } | null)?.name ?? "";
+      if (/GraphqlQueryError|GraphQLQueryError/i.test(errorName)) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new ShopifyGraphQLRequestError(message, error);
+      }
+
+      const status = thrownHttpStatus(error);
+      if (status !== undefined) {
+        if (status === 429 || errorName === "HttpThrottlingError") {
+          if (attempt === MAX_ATTEMPTS) {
+            throw new ShopifyGraphQLRequestError(
+              "GraphQL request still THROTTLED after retries",
+              error,
+            );
+          }
+          const retryAfter = (error as { response?: { retryAfter?: unknown } }).response?.retryAfter;
+          await sleep(typeof retryAfter === "number" ? retryAfter * 1000 : backoffDelayMs(attempt));
+          continue;
+        }
+        if (status < 500) {
+          throw new ShopifyGraphQLRequestError(
+            error instanceof Error ? error.message : String(error),
+            error,
+          );
+        }
+        if (attempt === MAX_ATTEMPTS) {
+          throw new ShopifyGraphQLRequestError(
+            `GraphQL request failed with HTTP ${status} after ${MAX_ATTEMPTS} attempts`,
+            error,
+          );
+        }
+        await sleep(backoffDelayMs(attempt));
+        continue;
+      }
+
+      if (!isNetworkFailure(error)) {
+        throw new ShopifyGraphQLRequestError(
+          error instanceof Error ? error.message : String(error),
+          error,
+        );
+      }
+
       if (attempt === MAX_ATTEMPTS) {
         throw new ShopifyGraphQLRequestError(
           `GraphQL request failed after ${MAX_ATTEMPTS} attempts (network error)`,
@@ -132,9 +228,7 @@ export async function executeWithRetry<TData>(
       // GraphQL validation/runtime errors on an HTTP 200 response are
       // permanent — never retried and never labelled as a network error.
       throw new ShopifyGraphQLRequestError(
-        `GraphQL request rejected with errors (not retried): ${body.errors
-          .map((e) => e.message)
-          .join("; ")}`,
+        `GraphQL request rejected with errors (not retried): ${formatGraphQLErrors(body.errors)}`,
         body.errors,
       );
     }

@@ -80,6 +80,17 @@ describe("executeWithRetry", () => {
     expect(send).toHaveBeenCalledTimes(3);
   });
 
+  it("retries a genuine network failure with backoff", async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(jsonResponse({ data: { ok: true } }));
+    const promise = executeWithRetry<{ ok: boolean }>(send);
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(promise).resolves.toMatchObject({ data: { ok: true } });
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
   it("throws a clear error after 5 failed attempts", async () => {
     const send = vi.fn().mockResolvedValue(jsonResponse({}, 500));
     // Attach the rejection expectation BEFORE advancing timers so the
@@ -131,6 +142,23 @@ describe("executeWithRetry", () => {
     expect(error).toBeInstanceOf(ShopifyGraphQLRequestError);
     expect(error.message).toContain("Field 'x' doesn't exist");
     expect(send).toHaveBeenCalledTimes(1); // GraphQL errors are not retried
+  });
+
+  it("does not retry a Shopify GraphqlQueryError thrown by the admin client", async () => {
+    const error = Object.assign(new Error("Field 'available' doesn't exist on type 'InventoryLevel'"), {
+      name: "GraphqlQueryError",
+      body: {
+        errors: {
+          graphQLErrors: [{ message: "Field 'available' doesn't exist on type 'InventoryLevel'" }],
+        },
+      },
+    });
+    const send = vi.fn().mockRejectedValue(error);
+
+    await expect(executeWithRetry(send)).rejects.toThrow(
+      "Field 'available' doesn't exist on type 'InventoryLevel'",
+    );
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   it("throws when the response has no data", async () => {

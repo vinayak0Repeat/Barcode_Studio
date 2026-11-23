@@ -38,17 +38,18 @@ model Shop {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  settings       Setting[]
-  counters       Counter[]
-  labelSizes     LabelSize[]
-  templates      LabelTemplate[]
-  printJobs      PrintJob[]
-  activities     Activity[]
-  cachedProducts CachedProduct[]
-  cachedVariants CachedVariant[]
-  burnedValues   BurnedValue[]
-  syncState      SyncState?
-  jobRuns        JobRun[]
+  settings            Setting[]
+  counters            Counter[]
+  labelSizes          LabelSize[]
+  templates           LabelTemplate[]
+  printJobs           PrintJob[]
+  activities          Activity[]
+  cachedProducts      CachedProduct[]
+  cachedVariants      CachedVariant[]
+  cachedInventoryLevels CachedInventoryLevel[]
+  burnedValues        BurnedValue[]
+  syncState           SyncState?
+  jobRuns             JobRun[]
 }
 
 model Setting {
@@ -170,12 +171,15 @@ model PrintJobLine {
 model Activity {
   id           String   @id @default(cuid())
   shopId       String
-  type         String // generated | resolved | printed | sku_generated
+  type         String // generated | resolved | printed | sku_generated | stock_set
   at           DateTime @default(now())
   staffId      String?
   productCount Int      @default(0)
   labelCount   Int      @default(0)
   jobId        String?
+  // Optional structured detail for newer activity types (e.g. stock_set:
+  // variantGid, locationGid, locationName, previousQuantity, newQuantity).
+  meta         Json?
 
   shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
@@ -229,6 +233,29 @@ model CachedVariant {
   @@index([shopId, sku])
   @@index([shopId, psSku])
   @@index([shopId, valorSku])
+}
+
+/**
+ * Per-location available quantities, filled during catalog sync (read-only
+ * against Shopify) and refreshed for the affected variant right before each
+ * stock write. CachedVariant.inventoryQuantity stays the sum across levels.
+ */
+model CachedInventoryLevel {
+  id               String   @id // `${shopId}:${inventoryItemGid}:${locationGid}`
+  shopId           String
+  /** Denormalized for the write path (lookup levels by variant). */
+  variantGid       String
+  inventoryItemGid String
+  locationGid      String
+  locationName     String?
+  locationActive   Boolean  @default(true)
+  available        Int      @default(0)
+  updatedAt        DateTime @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, inventoryItemGid, locationGid])
+  @@index([shopId, variantGid])
 }
 
 model BurnedValue {

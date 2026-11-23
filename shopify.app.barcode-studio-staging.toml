@@ -7,7 +7,7 @@ embedded = true
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_inventory,read_products,write_products"
+scopes = "read_inventory,read_products,write_products,write_inventory"
 
 [auth]
 redirect_urls = [ "https://barcodestudio-production.up.railway.app/api/auth" ]

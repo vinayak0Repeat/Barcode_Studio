@@ -51,7 +51,7 @@ export const loader = withPerfLoader("app.print-history", async ({ request }: Lo
 
   if (tab === "activity") {
     const requestedType = url.searchParams.get("type") ?? "all";
-    const type: ActivityType | "all" = ["generated", "resolved", "printed", "sku_generated"].includes(requestedType)
+    const type: ActivityType | "all" = ["generated", "resolved", "printed", "sku_generated", "stock_set"].includes(requestedType)
       ? requestedType as ActivityType : "all";
     const where = buildActivityWhere(shopId, { type });
     const [rows, total, typeCounts] = await Promise.all([
@@ -382,7 +382,7 @@ export default function PrintHistoryPage() {
         ) : (
           <>
             <s-stack direction="inline" gap="base">
-              {(["all", "generated", "resolved", "printed", "sku_generated"] as const).map(
+              {(["all", "generated", "resolved", "printed", "sku_generated", "stock_set"] as const).map(
                 (type) => (
                   <s-button
                     key={type}

@@ -47,7 +47,7 @@ export function buildJobsWhere(
   return where;
 }
 
-export type ActivityType = "generated" | "resolved" | "printed" | "sku_generated";
+export type ActivityType = "generated" | "resolved" | "printed" | "sku_generated" | "stock_set";
 
 export function outputUrlForKind(kind: "print" | "pdf", urls: { printUrl: string; pdfUrl: string }): string {
   return kind === "pdf" ? urls.pdfUrl : urls.printUrl;

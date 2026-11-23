@@ -10,9 +10,9 @@
  * - price/compareAtPrice return the Money SCALAR in 2026-07 (serialized as a
  *   plain string like "19.99") — no subselections allowed on them.
  *
- * Page sizes keep the query under the 1,000-point cap:
- * 50 products × up to 100 variants each has always been well under the cap
- * for scalar-field selects like this one.
+ * Page sizes keep the products → variants connection tree below Shopify's
+ * 1,000-point per-query cap. Inventory levels are loaded in separate
+ * chunked nodes(ids:) reads; they must not be nested under this tree.
  */
 
 export const VARIANT_FIELDS = /* GraphQL */ `
@@ -24,6 +24,9 @@ export const VARIANT_FIELDS = /* GraphQL */ `
   price
   compareAtPrice
   inventoryQuantity
+  inventoryItem {
+    id
+  }
   selectedOptions {
     name
     value
@@ -120,4 +123,5 @@ export const PRODUCT_BY_ID_QUERY = /* GraphQL */ `
 
 /** Page sizes (exported so tests and the sync service share them). */
 export const PRODUCT_PAGE_SIZE = 50;
-export const VARIANT_PAGE_SIZE = 100;
+// 50 products × 10 variants is approximately 550 connection points.
+export const VARIANT_PAGE_SIZE = 10;

@@ -12,6 +12,7 @@ import {
   type ShopifyProductNode,
   type ShopifyVariantNode,
 } from "./map.server";
+import { hydrateInventoryLevels } from "./inventoryLevels.server";
 
 type ProductByIdData = {
   product: ShopifyProductNode | null;
@@ -26,7 +27,7 @@ async function fetchProductWithAllVariants(
   });
   if (!data.product) return null;
 
-  // Follow variant pagination so products with >100 variants aren't truncated.
+  // Follow variant pagination so large products aren't truncated.
   const product = data.product;
   let { hasNextPage, endCursor } = product.variants.pageInfo;
   while (hasNextPage && endCursor) {
@@ -51,6 +52,9 @@ async function fetchProductWithAllVariants(
                 price
                 compareAtPrice
                 inventoryQuantity
+                inventoryItem {
+                  id
+                }
                 selectedOptions {
                   name
                   value
@@ -70,6 +74,10 @@ async function fetchProductWithAllVariants(
     product.variants.nodes.push(...connection.nodes);
     hasNextPage = connection.pageInfo.hasNextPage;
     endCursor = connection.pageInfo.endCursor;
+  }
+  const hydration = await hydrateInventoryLevels(admin, product.variants.nodes);
+  if (hydration.errors.length > 0) {
+    throw new Error(`Product webhook inventory-level refresh failed: ${hydration.errors.join("; ")}`);
   }
   return product;
 }
@@ -114,6 +122,17 @@ export async function refetchAndUpsertProduct(
         create: mappedProduct,
       });
 
+      // Delete old level rows too: they have no FK to CachedVariant, and this
+      // replacement can remove variants that are absent from Shopify now.
+      const oldVariants = await tx.cachedVariant.findMany({
+        where: { shopId: shopDomain, productGid },
+        select: { gid: true },
+      });
+      if (oldVariants.length > 0) {
+        await tx.cachedInventoryLevel.deleteMany({
+          where: { shopId: shopDomain, variantGid: { in: oldVariants.map((variant) => variant.gid) } },
+        });
+      }
       // Delete ALL of this product's variants; the fresh set is inserted
       // right after, which also removes variants that no longer exist.
       await tx.cachedVariant.deleteMany({
@@ -148,6 +167,31 @@ export async function refetchAndUpsertProduct(
           }),
           skipDuplicates: true,
         });
+
+        const levelRows = mappedVariants.flatMap((variant) => {
+          const item = variant.inventoryItem;
+          if (!item) return [];
+          return item.inventoryLevels.nodes.flatMap((level) => {
+            if (!level.location) return [];
+            return [{
+              id: `${shopDomain}:${item.id}:${level.location.id}`,
+              shopId: shopDomain,
+              variantGid: variant.id,
+              inventoryItemGid: item.id,
+              locationGid: level.location.id,
+              locationName: level.location.name,
+              locationActive: level.location.isActive,
+              available: Math.trunc(level.available ?? 0),
+              updatedAt: new Date(),
+            }];
+          });
+        });
+        if (levelRows.length > 0) {
+          await tx.cachedInventoryLevel.createMany({
+            data: levelRows,
+            skipDuplicates: true,
+          });
+        }
       }
     },
     { timeout: 30000, maxWait: 10000 },
@@ -161,10 +205,24 @@ export async function deleteProduct(
   shopDomain: string,
   productGid: string,
 ): Promise<void> {
+  // Read the product's variant gids first: inventory levels are keyed by
+  // variant, and the variants row delete below must not lose that link.
+  const variantGids = (
+    await prisma.cachedVariant.findMany({
+      where: { shopId: shopDomain, productGid },
+      select: { gid: true },
+    })
+  ).map((variant) => variant.gid);
+
   await prisma.$transaction([
     prisma.cachedVariant.deleteMany({
       where: { shopId: shopDomain, productGid },
     }),
+    ...(variantGids.length > 0
+      ? [prisma.cachedInventoryLevel.deleteMany({
+          where: { shopId: shopDomain, variantGid: { in: variantGids } },
+        })]
+      : []),
     prisma.cachedProduct.deleteMany({
       where: { shopId: shopDomain, gid: productGid },
     }),

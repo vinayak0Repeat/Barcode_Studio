@@ -10,6 +10,21 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { Prisma } from "@prisma/client";
 import { generateForVariants, getBarcodeConfig, setBarcode } from "../services/barcode/engine.server";
+import { WriteNotAllowedError } from "../services/shopify/barcodeWriter.server";
+import {
+  InventoryPermissionError,
+  inventoryWritesEnabled,
+  isAccessDeniedFailure,
+  permissionMessage,
+} from "../services/shopify/inventoryWriter.server";
+import {
+  setVariantStock,
+  StockBusyError,
+  StockChangedError,
+  StockInputError,
+  StockNotFoundError,
+  StockTargetError,
+} from "../services/inventory/engine.server";
 import { fitLabel } from "../services/labels/labelGeometry.shared";
 import { templateInputToToggles, templateLayoutToSheetMode } from "../services/labels/adminValidation.shared";
 import { getLabelDefault } from "../services/labels/adminSettings.server";
@@ -190,6 +205,8 @@ export const loader = withPerfLoader("app.print-labels", async ({ request }: Loa
     defaultSizeId,
     barcodeType: config.type,
     barcodeLength: config.length,
+    /** Read-only stock cells in the UI when the inventory write guard is off. */
+    stockEditEnabled: inventoryWritesEnabled(session.shop),
     restore,
   };
 });
@@ -206,6 +223,18 @@ interface ActionResult {
   generated?: Array<{ gid: string; barcode: string }>;
   variantGid?: string;
   barcode?: string;
+  /** Marks a response as belonging to the "setStock" intent. */
+  stockIntent?: boolean;
+  /** Machine-readable failure kind for the stock cell UI. */
+  code?: "input" | "guard" | "busy" | "changed" | "negative" | "no-stocked-location" | "not-found" | "permission" | "error";
+  /** Fresh total on a CAS mismatch ("Stock changed in Shopify, reloaded"). */
+  freshQuantity?: number;
+  stock?: {
+    previousQuantity: number;
+    newTotal: number;
+    locationName: string | null;
+    unchanged: boolean;
+  };
 }
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -253,6 +282,81 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const failPrint = (message: string, status = 400, extra: { skipped?: ActionResult["skipped"] } = {}) =>
     data({ ok: false, message, ...extra } as ActionResult, { status });
+
+  /** Maps stock-engine failures to the row banner message + code. */
+  const stockFailure = (variantGid: string, error: unknown): ActionResult => {
+    if (error instanceof StockInputError) {
+      return { ok: false, stockIntent: true, variantGid, code: "input", message: error.message };
+    }
+    if (error instanceof WriteNotAllowedError) {
+      return { ok: false, stockIntent: true, variantGid, code: "guard", message: error.message };
+    }
+    if (error instanceof StockBusyError) {
+      return { ok: false, stockIntent: true, variantGid, code: "busy", message: error.message };
+    }
+    if (error instanceof StockChangedError) {
+      return {
+        ok: false,
+        stockIntent: true,
+        variantGid,
+        code: "changed",
+        message: error.message,
+        ...(error.freshTotal !== null ? { freshQuantity: error.freshTotal } : {}),
+      };
+    }
+    if (error instanceof StockTargetError) {
+      return { ok: false, stockIntent: true, variantGid, code: error.code, message: error.message };
+    }
+    if (error instanceof StockNotFoundError) {
+      return { ok: false, stockIntent: true, variantGid, code: "not-found", message: error.message };
+    }
+    if (error instanceof InventoryPermissionError || isAccessDeniedFailure(error)) {
+      return { ok: false, stockIntent: true, variantGid, code: "permission", message: permissionMessage() };
+    }
+    return {
+      ok: false,
+      stockIntent: true,
+      variantGid,
+      code: "error",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  };
+
+  if (intent === "setStock") {
+    const variantGid = String(form.get("variantGid") ?? "");
+    const quantityRaw = String(form.get("quantity") ?? "").trim();
+    if (!variantGid) {
+      return data({ ok: false, stockIntent: true, code: "input", message: "Variant is required." } as ActionResult, { status: 400 });
+    }
+    if (!/^\d+$/.test(quantityRaw)) {
+      return data(stockFailure(variantGid, new StockInputError("Enter a whole number of 0 or more.")), { status: 400 });
+    }
+    try {
+      const result = await setVariantStock(
+        session.shop,
+        admin,
+        variantGid,
+        Number(quantityRaw),
+        { staffId: typeof sessionToken?.sub === "string" ? sessionToken.sub : undefined },
+      );
+      return data({
+        ok: true,
+        stockIntent: true,
+        variantGid,
+        message: result.unchanged
+          ? "Stock already at that value."
+          : `Stock set to ${result.newTotal}${result.locationName ? ` at ${result.locationName}` : ""}.`,
+        stock: {
+          previousQuantity: result.previousQuantity,
+          newTotal: result.newTotal,
+          locationName: result.locationName,
+          unchanged: result.unchanged,
+        },
+      } as ActionResult);
+    } catch (error) {
+      return data(stockFailure(variantGid, error), { status: 400 });
+    }
+  }
 
   if (intent !== "print") {
     return data({ ok: false, message: "Unknown intent." } as ActionResult, { status: 400 });
@@ -563,6 +667,15 @@ export default function PrintLabelsPage() {
   const [savingBarcode, setSavingBarcode] = useState<Set<string>>(new Set());
   const cancelBarcodeSave = useRef(new Set<string>());
   const barcodeFetcher = useFetcher<typeof action>();
+  // ----- variant stock editing (expanded rows only; server-guarded) -----
+  const stockEditEnabled = loaderData.stockEditEnabled;
+  const stockFetcher = useFetcher<typeof action>();
+  const [stockEditing, setStockEditing] = useState<Record<string, string>>({});
+  const [savingStock, setSavingStock] = useState<Set<string>>(new Set());
+  const [stockErrors, setStockErrors] = useState<Record<string, string>>({});
+  const [stockSaved, setStockSaved] = useState<Record<string, { previousQuantity: number; locationName: string | null }>>({});
+  const cancelStockEdit = useRef(new Set<string>());
+  const stockUndoTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const [sheetMode, setSheetMode] = useState<"roll" | "grid">(loaderData.restore?.sheetMode ?? (initialTemplate ? templateLayoutToSheetMode(initialTemplate.layout) : "grid"));
   const [toggles, setToggles] = useState(() => loaderData.restore?.toggles ?? (initialTemplate ? templateInputToToggles(initialTemplate) : {
     showProductTitle: true, showVariantTitle: true, showSku: true, showPrice: false, showBarcodeText: true,
@@ -940,6 +1053,115 @@ export default function PrintLabelsPage() {
     setSelected((prev) => clearSelectedQuantitiesMap(prev, kind));
   };
 
+  // ----- stock editing (Odoo semantics: typed value = desired total) -----
+  const STOCK_UNDO_MS = 10_000;
+
+  const clearStockSavedFlash = (gid: string) => {
+    setStockSaved((prev) => {
+      if (!(gid in prev)) return prev;
+      const next = { ...prev };
+      delete next[gid];
+      return next;
+    });
+  };
+
+  /** Applies a new on-hand total to every live surface without a reload. */
+  const applyStockQuantity = (gid: string, newQuantity: number) => {
+    const current = Object.values(variantCache).flat().find((row) => row.gid === gid);
+    const delta = newQuantity - (current?.inventoryQuantity ?? 0);
+    setVariantCache((prev) => Object.fromEntries(Object.entries(prev).map(([key, rows]) => [key, rows.map((row) => row.gid === gid ? { ...row, inventoryQuantity: newQuantity } : row)])));
+    // The read-only parent "Stock N" total follows the same delta.
+    if (current && delta !== 0) {
+      setProducts((prev) => prev.map((product) => product.gid === current.productGid ? { ...product, stockSum: product.stockSum + delta } : product));
+    }
+    // Default label qty follows stock only while the user never typed a qty
+    // for this variant (explicit per-row quantity still wins).
+    if (selected.has(gid) && !quantityTouchedGids.current.has(gid) && mode === "stock") {
+      const fromStock = quantityFromStock(newQuantity);
+      setSelected((prev) => {
+        const next = new Map(prev);
+        next.set(gid, fromStock.quantity);
+        return next;
+      });
+      setCappedQuantityGids((prev) => {
+        const next = new Set(prev);
+        fromStock.capped ? next.add(gid) : next.delete(gid);
+        return next;
+      });
+    }
+  };
+
+  const submitStock = (gid: string, quantity: number) => {
+    setSavingStock((prev) => new Set(prev).add(gid));
+    setStockErrors((prev) => {
+      const next = { ...prev };
+      delete next[gid];
+      return next;
+    });
+    clearStockSavedFlash(gid);
+    const form = new FormData();
+    form.set("intent", "setStock");
+    form.set("variantGid", gid);
+    form.set("quantity", String(quantity));
+    stockFetcher.submit(form, { method: "POST" });
+  };
+
+  /** Enter/blur: validate, no-op when unchanged, otherwise save immediately. */
+  const commitStock = (variant: VariantDetail) => {
+    const raw = (stockEditing[variant.gid] ?? "").trim();
+    setStockEditing((prev) => {
+      const next = { ...prev };
+      delete next[variant.gid];
+      return next;
+    });
+    if (raw === "" || !/^\d+$/.test(raw)) {
+      setStockErrors((prev) => ({ ...prev, [variant.gid]: "Enter a whole number of 0 or more." }));
+      return;
+    }
+    const parsed = Number(raw);
+    if (parsed === (variant.inventoryQuantity ?? 0)) return; // unchanged no-op
+    submitStock(variant.gid, parsed);
+  };
+
+  /** Undo (10s window): re-apply the previous total; CAS guards the race. */
+  const undoStock = (variant: VariantDetail, previousQuantity: number) => {
+    clearStockSavedFlash(variant.gid);
+    submitStock(variant.gid, previousQuantity);
+  };
+
+  useEffect(() => {
+    if (stockFetcher.state !== "idle" || !stockFetcher.data) return;
+    const result = stockFetcher.data;
+    if (!result.stockIntent || !result.variantGid) return;
+    const gid = result.variantGid;
+    setSavingStock((prev) => {
+      const next = new Set(prev);
+      next.delete(gid);
+      return next;
+    });
+    if (result.ok && result.stock) {
+      setStockErrors((prev) => {
+        const next = { ...prev };
+        delete next[gid];
+        return next;
+      });
+      if (!result.stock.unchanged) {
+        applyStockQuantity(gid, result.stock.newTotal);
+        const saved = { previousQuantity: result.stock.previousQuantity, locationName: result.stock.locationName };
+        setStockSaved((prev) => ({ ...prev, [gid]: saved }));
+        const timer = stockUndoTimers.current.get(gid);
+        if (timer) clearTimeout(timer);
+        stockUndoTimers.current.set(gid, setTimeout(() => clearStockSavedFlash(gid), STOCK_UNDO_MS));
+      }
+      return;
+    }
+    // Failure: the input falls back to the current (unchanged) stock value;
+    // a CAS mismatch also refreshes the row with the fresh total.
+    clearStockSavedFlash(gid);
+    setStockErrors((prev) => ({ ...prev, [gid]: result.message }));
+    if (typeof result.freshQuantity === "number") applyStockQuantity(gid, result.freshQuantity);
+  }, [stockFetcher.state, stockFetcher.data]);
+
   const saveBarcode = (gid: string) => {
     const value = editingBarcode[gid] ?? "";
     setSavingBarcode((prev) => new Set([...prev, gid]));
@@ -1301,11 +1523,62 @@ export default function PrintLabelsPage() {
               <input type="checkbox" aria-label={`Select ${variant.title ?? "variant"}`} checked={selected.has(variant.gid)} onChange={() => toggleVariant(variant.gid)} />
               <span className="bs-variant-name" title={variant.title ?? "Variant"}>{variant.title ?? "—"}</span>
               <span className="bs-variant-sku">{variant.sku ?? "—"}</span>
-              <label><span className="bs-muted">Barcode</span><input aria-label={`Barcode for ${variant.title ?? "variant"}`} value={editingBarcode[variant.gid] ?? variant.barcode ?? ""} disabled={savingBarcode.has(variant.gid)} onFocus={() => setEditingBarcode((prev) => ({ ...prev, [variant.gid]: variant.barcode ?? "" }))} onChange={(event) => setEditingBarcode((prev) => ({ ...prev, [variant.gid]: event.target.value }))} onBlur={() => { if (cancelBarcodeSave.current.delete(variant.gid)) return; if ((editingBarcode[variant.gid] ?? variant.barcode ?? "") !== (variant.barcode ?? "")) saveBarcode(variant.gid); }} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); (event.currentTarget as HTMLInputElement).blur(); } if (event.key === "Escape") { cancelBarcodeSave.current.add(variant.gid); setEditingBarcode((prev) => ({ ...prev, [variant.gid]: variant.barcode ?? "" })); (event.currentTarget as HTMLInputElement).blur(); } }} />{!variant.barcode && <a href="/app/generator?filter=missing">Add barcode</a>}</label>
-              <span>{variant.price ?? "—"}</span><span className={`bs-stock ${variant.inventoryQuantity == null ? "" : variant.inventoryQuantity < 0 ? "bs-stock-negative" : variant.inventoryQuantity === 0 ? "bs-stock-zero" : "bs-stock-positive"}`}>{variant.inventoryQuantity ?? "—"}</span>
+              <label><span className="bs-barcode-caption"><span className="bs-muted">Barcode</span>{!variant.barcode && <a href="/app/generator?filter=missing">Add barcode</a>}</span><input aria-label={`Barcode for ${variant.title ?? "variant"}`} value={editingBarcode[variant.gid] ?? variant.barcode ?? ""} disabled={savingBarcode.has(variant.gid)} onFocus={() => setEditingBarcode((prev) => ({ ...prev, [variant.gid]: variant.barcode ?? "" }))} onChange={(event) => setEditingBarcode((prev) => ({ ...prev, [variant.gid]: event.target.value }))} onBlur={() => { if (cancelBarcodeSave.current.delete(variant.gid)) return; if ((editingBarcode[variant.gid] ?? variant.barcode ?? "") !== (variant.barcode ?? "")) saveBarcode(variant.gid); }} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); (event.currentTarget as HTMLInputElement).blur(); } if (event.key === "Escape") { cancelBarcodeSave.current.add(variant.gid); setEditingBarcode((prev) => ({ ...prev, [variant.gid]: variant.barcode ?? "" })); (event.currentTarget as HTMLInputElement).blur(); } }} /></label>
+              <span>{variant.price ?? "—"}</span>
+              {stockEditEnabled ? (
+                <span className="bs-stock-cell">
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    inputMode="numeric"
+                    className="bs-stock-input"
+                    aria-label={`Stock for ${variant.title ?? "variant"}`}
+                    disabled={savingStock.has(variant.gid) || stockFetcher.state !== "idle"}
+                    value={stockEditing[variant.gid] ?? (variant.inventoryQuantity ?? "").toString()}
+                    onFocus={() => setStockEditing((prev) => ({ ...prev, [variant.gid]: String(variant.inventoryQuantity ?? 0) }))}
+                    onChange={(event) => setStockEditing((prev) => ({ ...prev, [variant.gid]: event.target.value }))}
+                    onBlur={() => {
+                      if (cancelStockEdit.current.delete(variant.gid)) return; // Esc: keep current value
+                      commitStock(variant);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
+                      if (event.key === "Escape") {
+                        cancelStockEdit.current.add(variant.gid);
+                        setStockEditing((prev) => { const next = { ...prev }; delete next[variant.gid]; return next; });
+                        event.currentTarget.blur();
+                      }
+                    }}
+                  />
+                  {savingStock.has(variant.gid) && <span className="bs-stock-spinner" role="status" aria-label="Saving stock" />}
+                  {stockSaved[variant.gid] && (
+                    <button
+                      type="button"
+                      className="bs-stock-undo"
+                      onClick={() => undoStock(variant, stockSaved[variant.gid]!.previousQuantity)}
+                    >Undo</button>
+                  )}
+                </span>
+              ) : (
+                <span
+                  className={`bs-stock ${variant.inventoryQuantity == null ? "" : variant.inventoryQuantity < 0 ? "bs-stock-negative" : variant.inventoryQuantity === 0 ? "bs-stock-zero" : "bs-stock-positive"}`}
+                  title="Inventory editing is disabled"
+                >
+                  {variant.inventoryQuantity ?? "—"}
+                </span>
+              )}
               <div className="bs-variant-status"><span className="bs-status-pill"><s-badge tone={status === "Ready" ? "success" : status === "Missing" ? "caution" : "critical"} aria-label={statusInfo.ariaLabel}>{status}</s-badge></span>{statusInfo.reason && status !== "Missing" && <span className="bs-muted" title={statusInfo.reason}>{statusInfo.reason}</span>}</div>
               {selected.has(variant.gid) && <span className="bs-qty-controls"><button type="button" onClick={() => setQty(variant.gid, selected.get(variant.gid)! - 1)}>−</button><input aria-label="Quantity" type="number" min="0" max={DEFAULT_CAP_PER_VARIANT} value={selected.get(variant.gid)} onChange={(event) => setQty(variant.gid, event.target.value)} /><button type="button" onClick={() => setQty(variant.gid, selected.get(variant.gid)! + 1)}>+</button></span>}
               {(barcodeErrors[variant.gid] || barcodeSaved[variant.gid]) && <div className="bs-row-banner"><s-banner tone={barcodeErrors[variant.gid] ? "critical" : "success"}>{barcodeErrors[variant.gid] ?? barcodeSaved[variant.gid]}<button type="button" onClick={() => { setBarcodeErrors((prev) => { const next = { ...prev }; delete next[variant.gid]; return next; }); setBarcodeSaved((prev) => { const next = { ...prev }; delete next[variant.gid]; return next; }); }}>Dismiss</button></s-banner></div>}
+              {stockErrors[variant.gid] && (
+                <div className="bs-row-banner">
+                  <s-banner tone="critical">
+                    {stockErrors[variant.gid]}
+                    <button type="button" onClick={() => setStockErrors((prev) => { const next = { ...prev }; delete next[variant.gid]; return next; })}>Dismiss</button>
+                  </s-banner>
+                </div>
+              )}
             </div>;
           })}</div>}
         </Fragment>;

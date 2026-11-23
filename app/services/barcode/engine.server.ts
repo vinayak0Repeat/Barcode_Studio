@@ -418,10 +418,11 @@ export async function assertSafeToWrite(shopDomain: string) {
   }
 }
 
-/** Shared with the SKU engine (Step 5): claims the per-shop write lock. */
+/** Shared with the SKU engine (Step 5) and the inventory stock engine:
+ * claims the per-shop write lock. */
 export async function claimWriteJob(
   shopDomain: string,
-  type: "barcode_generate" | "barcode_resolve" | "sku_generate",
+  type: "barcode_generate" | "barcode_resolve" | "sku_generate" | "stock_set",
   params: object,
 ) {
   const running = await prisma.jobRun.findFirst({
