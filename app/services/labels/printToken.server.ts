@@ -108,3 +108,11 @@ export function printUrlFor(shopDomain: string, jobId: string): string {
 export function pdfUrlFor(shopDomain: string, jobId: string): string {
   return `/pdf/${jobId}?t=${signPrintToken(shopDomain, jobId)}`;
 }
+
+/**
+ * Signed URL serving the same fragment as /print but as a bare HTML document
+ * (no auto-print, no chrome) for the in-admin hidden-iframe print flow.
+ */
+export function printRawUrlFor(shopDomain: string, jobId: string): string {
+  return `/print-raw/${jobId}?t=${signPrintToken(shopDomain, jobId)}`;
+}

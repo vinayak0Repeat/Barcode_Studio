@@ -4,11 +4,13 @@ import type {
   LinksFunction,
   LoaderFunctionArgs,
   MetaFunction,
+  ShouldRevalidateFunctionArgs,
 } from "react-router";
 import { data, useFetcher, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { Prisma } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 import { generateForVariants, getBarcodeConfig, setBarcode } from "../services/barcode/engine.server";
 import { WriteNotAllowedError } from "../services/shopify/barcodeWriter.server";
 import {
@@ -30,8 +32,19 @@ import { templateInputToToggles, templateLayoutToSheetMode } from "../services/l
 import { getLabelDefault } from "../services/labels/adminSettings.server";
 import { formatPrice } from "../services/labels/formatPrice";
 import { buildPrintPlan } from "../services/labels/plan.server";
-import { pdfUrlFor, printUrlFor } from "../services/labels/printToken.server";
-import { allocateBlock, formatValue } from "../services/barcode/sequence.server";
+import { pdfUrlFor, printRawUrlFor, printUrlFor } from "../services/labels/printToken.server";
+import {
+  createPrintFrameSession,
+  debugPrintInPage,
+  downloadPdfFile,
+  firstInvocationForKey,
+  isCurrentPrintPreparation,
+  printPreparationRequestKey,
+  printInPageSupported,
+} from "../services/labels/printInPage.shared";
+import { printInPageEnabled } from "../services/labels/printInPageFlag.server";
+import { PrintInPageStatus, type PrintInPageFeedback } from "../components/PrintInPageStatus";
+import { allocateBlock, formatValue, releaseBlock, type SequenceBlock } from "../services/barcode/sequence.server";
 import {
   clampQuantity,
   clearSelectedQuantities as clearSelectedQuantitiesMap,
@@ -60,7 +73,8 @@ import { validateValue } from "../services/barcode/validate.shared";
 import { barcodeLabelStatus } from "../services/barcode/status.shared";
 import { buildPreviewEntries, buildPreviewNotes, countPrintableLabels, loadBarcodeSvgSources, previewPage, shouldShowPreviewEmptyState, uniqueBarcodeUrls, type BarcodeSvgPromiseCache, type BarcodeSvgSource } from "../services/labels/previewStack.shared";
 import { diffRestoreLines } from "../services/printHistory.shared";
-import { createPrintedActivity } from "../services/printJobActivity.server";
+import { createPrintJobWithActivity, createPrintJobWithActivityBatch } from "../services/labels/printJobCreate.server";
+import { layoutPrintRawJob, renderPrintRawDocument } from "../services/labels/printRawDocument.server";
 import { barcodeEditFailure } from "../services/labels/barcodeEdit.shared";
 import { openPrintWindow } from "../services/labels/openPrintWindow.shared";
 import { withPerfLoader } from "../services/perf.server";
@@ -71,8 +85,49 @@ export const meta: MetaFunction = () => [
 ];
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: printStyles }];
 
+export function shouldRevalidate({ formData, defaultShouldRevalidate }: ShouldRevalidateFunctionArgs) {
+  if (formData?.get("_printInPage") === "true" && ["print", "prepare-print"].includes(String(formData?.get("intent") ?? ""))) return false;
+  return defaultShouldRevalidate;
+}
+
 const PRODUCTS_PAGE_SIZE = 20; // products per page ("Load more" appends)
 type Filter = "all" | "has" | "missing";
+
+function startDevTimer(label: string): () => void {
+  if (process.env.NODE_ENV === "production") return () => {};
+  console.time(label);
+  let ended = false;
+  return () => {
+    if (ended) return;
+    ended = true;
+    console.timeEnd(label);
+  };
+}
+
+async function devTimed<T>(label: string, work: () => Promise<T>): Promise<T> {
+  const end = startDevTimer(label);
+  try {
+    return await work();
+  } finally {
+    end();
+  }
+}
+
+function devTimedSync<T>(label: string, work: () => T): T {
+  const end = startDevTimer(label);
+  try {
+    return work();
+  } finally {
+    end();
+  }
+}
+
+function isPrintDbConnectionError(error: unknown): boolean {
+  if (error instanceof Prisma.PrismaClientKnownRequestError && (error.code === "P1001" || error.code === "P1017")) return true;
+  if (typeof error === "object" && error !== null && "code" in error && (error.code === "P1001" || error.code === "P1017")) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /Transaction already closed|Can't reach database server|connection reset|server has closed|10054/i.test(message);
+}
 
 interface VariantDetail {
   gid: string;
@@ -208,6 +263,8 @@ export const loader = withPerfLoader("app.print-labels", async ({ request }: Loa
     /** Read-only stock cells in the UI when the inventory write guard is off. */
     stockEditEnabled: inventoryWritesEnabled(session.shop),
     restore,
+    /** PRINT_IN_PAGE: hidden-iframe print + direct PDF download instead of popups. */
+    printInPage: printInPageEnabled(),
   };
 });
 
@@ -217,6 +274,12 @@ interface ActionResult {
   jobId?: string;
   printUrl?: string;
   pdfUrl?: string;
+  /** PRINT_IN_PAGE: signed bare-HTML document for the hidden print frame. */
+  printRawUrl?: string;
+  /** PRINT_IN_PAGE: prepared raw document for the selected settings. */
+  printRawHtml?: string;
+  preparePrint?: boolean;
+  requestKey?: string;
   outputFormat?: "print" | "pdf";
   printed?: number;
   skipped?: Array<{ variantGid: string; reason: string }>;
@@ -241,6 +304,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { session, admin, sessionToken } = await authenticate.admin(request);
   const form = await request.formData();
   const intent = String(form.get("intent") ?? "");
+  const prepareOnly = intent === "prepare-print";
 
   if (intent === "editBarcode") {
     const variantGid = String(form.get("variantGid") ?? "");
@@ -281,7 +345,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const failPrint = (message: string, status = 400, extra: { skipped?: ActionResult["skipped"] } = {}) =>
-    data({ ok: false, message, ...extra } as ActionResult, { status });
+    data({
+      ok: false,
+      message,
+      ...extra,
+      ...(prepareOnly ? { preparePrint: true, requestKey: String(form.get("requestKey") ?? "") } : {}),
+    } as ActionResult, { status });
 
   /** Maps stock-engine failures to the row banner message + code. */
   const stockFailure = (variantGid: string, error: unknown): ActionResult => {
@@ -358,10 +427,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
-  if (intent !== "print") {
+  if (intent !== "print" && !prepareOnly) {
     return data({ ok: false, message: "Unknown intent." } as ActionResult, { status: 400 });
   }
+  if (prepareOnly && !printInPageEnabled()) {
+    return data({ ok: false, message: "In-page print preparation is unavailable." } as ActionResult, { status: 400 });
+  }
 
+  const endPrintAction = startDevTimer("[print] action total");
+  let allocatedPrintBlock: SequenceBlock | null = null;
+  let printBlockPromise: Promise<SequenceBlock> | null = null;
+  let printBlockConsumed = false;
+  try {
   const selection = form.getAll("gids").map(String).filter(Boolean);
   if (selection.length === 0) {
     return failPrint("No variants selected.");
@@ -388,37 +465,48 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   // Re-validate everything from the cache; never trust client values.
-  const [size, template, cacheRows, config] = await Promise.all([
+  const blockPromise = prepareOnly ? null : allocateBlock(session.shop, "printjob", 1).then((block) => {
+    allocatedPrintBlock = block;
+    return block;
+  });
+  printBlockPromise = blockPromise;
+  const [size, template, cacheRows, config, block] = await devTimed("[print] parallel reads and sequence", () => Promise.all([
     prisma.labelSize.findFirst({ where: { id: sizeId, shopId: session.shop, active: true } }),
     prisma.labelTemplate.findFirst({ where: { id: templateId, shopId: session.shop, active: true } }),
-    prisma.cachedVariant.findMany({
-      where: { shopId: session.shop, gid: { in: selection } },
-      select: {
-        gid: true,
-        productGid: true,
-        title: true,
-        sku: true,
-        barcode: true,
-        price: true,
-        inventoryQuantity: true,
-      },
-    }),
+    prisma.$queryRaw<Array<{
+      gid: string;
+      productGid: string;
+      productTitle: string | null;
+      title: string | null;
+      sku: string | null;
+      barcode: string | null;
+      price: string | null;
+      inventoryQuantity: number | null;
+    }>>`
+      SELECT v."gid", v."productGid", p."title" AS "productTitle", v."title", v."sku",
+             v."barcode", v."price", v."inventoryQuantity"
+      FROM "CachedVariant" v
+      LEFT JOIN "CachedProduct" p ON p."shopId" = v."shopId" AND p."gid" = v."productGid"
+      WHERE v."shopId" = ${session.shop} AND v."gid" IN (${Prisma.join(selection)})
+    `,
     getBarcodeConfig(session.shop),
-  ]);
+    blockPromise ?? Promise.resolve(null),
+  ]));
   if (!size) {
+    if (block) await releaseBlock(session.shop, "printjob", block);
+    printBlockConsumed = true;
     return failPrint("Choose a label size that exists for this shop.");
   }
   if (!template) {
+    if (block) await releaseBlock(session.shop, "printjob", block);
+    printBlockConsumed = true;
     return failPrint("Choose a label template that exists for this shop.");
   }
   if (!Number.isFinite(size.widthMm) || !Number.isFinite(size.heightMm) || size.widthMm <= 0 || size.heightMm <= 0) {
+    if (block) await releaseBlock(session.shop, "printjob", block);
+    printBlockConsumed = true;
     return failPrint("The selected label size must have positive width and height.");
   }
-  const products = await prisma.cachedProduct.findMany({
-    where: { shopId: session.shop, gid: { in: cacheRows.map((r) => r.productGid) } },
-    select: { gid: true, title: true },
-  });
-  const titleByGid = new Map(products.map((p) => [p.gid, p.title]));
   const submittedToggles = {
     showProductTitle: String(form.get("showProductTitle") ?? "false") === "true",
     showVariantTitle: String(form.get("showVariantTitle") ?? "false") === "true",
@@ -427,11 +515,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     showBarcodeText: String(form.get("showBarcodeText") ?? "false") === "true",
   };
 
-  const plan = buildPrintPlan(
+  const plan = devTimedSync("[print] buildPrintPlan", () => buildPrintPlan(
     cacheRows.map((row) => ({
       gid: row.gid,
       productGid: row.productGid,
-      productTitle: titleByGid.get(row.productGid) ?? null,
+      productTitle: row.productTitle,
       variantTitle: row.title,
       sku: row.sku,
       barcode: row.barcode,
@@ -448,7 +536,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       toggles: submittedToggles,
     },
     { type: (template.barcodeType || config.type) as typeof config.type, length: config.length },
-  );
+  ));
 
   if (plan.exceedsTotalCap) {
     return failPrint(`Too many labels (${plan.labelCount}). The hard cap is ${DEFAULT_TOTAL_CAP} labels per job.`);
@@ -459,72 +547,99 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         ok: false,
         message: "Nothing to print — every selected variant was skipped.",
         skipped: plan.skipped,
+        ...(prepareOnly ? { preparePrint: true, requestKey: String(form.get("requestKey") ?? "") } : {}),
       } as ActionResult,
       { status: 400 },
     );
   }
 
-  const block = await allocateBlock(session.shop, "printjob", 1);
-  const jobName = formatValue("BSP/", 5, block.start);
-  const job = await prisma.$transaction(async (tx) => {
-  const created = await tx.printJob.create({
-    data: {
-      shopId: session.shop,
-      staffId: typeof sessionToken?.sub === "string" ? sessionToken.sub : null,
+  const jobName = block ? formatValue("BSP/", 5, block.start) : "Print labels";
+  const templateSnap = {
+    name: template.name,
+    barcodeType: template.barcodeType,
+    layout: template.layout ?? "sheet",
+    fontSize: template.fontSize,
+    nameFontSize: template.nameFontSize,
+    skuFontSize: template.skuFontSize,
+    priceFontSize: template.priceFontSize,
+    barcodeTextFontSize: template.barcodeTextFontSize,
+    barcodeWidthPct: template.barcodeWidthPct,
+    barcodeHeightPct: template.barcodeHeightPct,
+    showProductName: template.showProductName,
+    showVariantName: template.showVariantName,
+    showSku: template.showSku,
+    showPrice: template.showPrice,
+    showBarcodeText: template.showBarcodeText,
+    variantTitles: Object.fromEntries(cacheRows.map((row) => [row.gid, row.title])),
+    toggles: submittedToggles,
+  };
+  const sizeSnap = {
+    sizeId: size.id,
+    name: size.name,
+    widthMm: size.widthMm,
+    heightMm: size.heightMm,
+    marginTop: size.marginTop,
+    marginRight: size.marginRight,
+    marginBottom: size.marginBottom,
+    marginLeft: size.marginLeft,
+    columns: size.columns,
+    rows: size.rows,
+    gapXmm: size.gapXmm,
+    gapYmm: size.gapYmm,
+    sheetMode,
+    skipped: plan.skipped,
+    quantityMode: mode,
+  } as unknown as Prisma.InputJsonValue;
+  if (prepareOnly) {
+    const html = renderPrintRawDocument(jobName, layoutPrintRawJob({
       name: jobName,
-      templateId: template?.id,
-      templateSnap: {
-        name: template?.name ?? null,
-        barcodeType: template?.barcodeType ?? null,
-        layout: template?.layout ?? "sheet",
-        fontSize: template?.fontSize ?? null,
-        nameFontSize: template?.nameFontSize ?? 0,
-        skuFontSize: template?.skuFontSize ?? 0,
-        priceFontSize: template?.priceFontSize ?? 0,
-        barcodeTextFontSize: template?.barcodeTextFontSize ?? 0,
-        barcodeWidthPct: template?.barcodeWidthPct ?? 0,
-        barcodeHeightPct: template?.barcodeHeightPct ?? 0,
-        showProductName: template?.showProductName ?? true,
-        showVariantName: template?.showVariantName ?? true,
-        showSku: template?.showSku ?? true,
-        showPrice: template?.showPrice ?? false,
-        showBarcodeText: template?.showBarcodeText ?? true,
-        variantTitles: Object.fromEntries(cacheRows.map((row) => [row.gid, row.title])),
-        toggles: submittedToggles,
-      },
-      sizeSnap: {
-        sizeId: size?.id ?? null,
-        name: size?.name ?? null,
-        widthMm: size?.widthMm ?? null,
-        heightMm: size?.heightMm ?? null,
-        marginTop: size?.marginTop ?? null,
-        marginRight: size?.marginRight ?? null,
-        marginBottom: size?.marginBottom ?? null,
-        marginLeft: size?.marginLeft ?? null,
-        columns: size?.columns ?? null,
-        rows: size?.rows ?? null,
-        gapXmm: size?.gapXmm ?? null,
-        gapYmm: size?.gapYmm ?? null,
-        sheetMode,
-        skipped: plan.skipped,
-        quantityMode: mode,
-      } as unknown as Prisma.InputJsonValue,
-      productCount: new Set(plan.lines.map((l) => l.productGid)).size,
-      lineCount: plan.lines.length,
-      labelCount: plan.labelCount,
-      state: "ready",
-    },
-  });
-
-  await tx.printJobLine.createMany({ data: plan.lines.map((line) => ({ jobId: created.id, ...line })) });
-  await createPrintedActivity(tx, {
-    shopId: session.shop, jobId: created.id,
+      lines: plan.lines,
+      templateSnap,
+      sizeSnap,
+    }));
+    return data({
+      ok: true,
+      message: "Labels are ready.",
+      preparePrint: true,
+      requestKey: String(form.get("requestKey") ?? ""),
+      printRawHtml: html,
+    } as ActionResult);
+  }
+  if (!block) return failPrint("Could not reserve a print-job sequence.", 503);
+  const markInlineOutputOpened = printInPageEnabled() && form.get("_printInPage") === "true" && outputFormat === "print";
+  const jobId = markInlineOutputOpened ? randomUUID() : undefined;
+  const jobData: Prisma.PrintJobCreateInput = {
+    ...(jobId ? { id: jobId } : {}),
+    shop: { connect: { id: session.shop } },
+    staffId: typeof sessionToken?.sub === "string" ? sessionToken.sub : null,
+    name: jobName,
+    templateId: template.id,
+    templateSnap,
+    sizeSnap,
+    productCount: new Set(plan.lines.map((line) => line.productGid)).size,
+    lineCount: plan.lines.length,
+    labelCount: plan.labelCount,
+    state: "ready",
+    lines: { create: plan.lines },
+  };
+  const activityData = {
+    shopId: session.shop,
     staffId: typeof sessionToken?.sub === "string" ? sessionToken.sub : null,
     productCount: new Set(plan.lines.map((line) => line.productGid)).size,
     labelCount: plan.labelCount,
-  });
-  return created;
-  });
+  };
+  let job: { id: string; name: string };
+  try {
+    job = await devTimed("[print] database create batch", () => jobId
+      ? createPrintJobWithActivityBatch(prisma, jobData as Prisma.PrintJobCreateInput & { id: string }, activityData, true)
+      : createPrintJobWithActivity(prisma, jobData, activityData));
+    printBlockConsumed = true;
+  } catch (error) {
+    if (isPrintDbConnectionError(error)) {
+      return failPrint("The database connection dropped while saving this print job. Check Print History before retrying, since the save may have completed.", 503);
+    }
+    throw error;
+  }
   invalidateDashboardSnapshot(session.shop);
 
   return data({
@@ -533,10 +648,33 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     jobId: job.id,
     printUrl: printUrlFor(session.shop, job.id),
     pdfUrl: pdfUrlFor(session.shop, job.id),
+    printRawUrl: printRawUrlFor(session.shop, job.id),
     outputFormat,
     printed: plan.labelCount,
     skipped: plan.skipped,
   } as ActionResult);
+  } catch (error) {
+    if (isPrintDbConnectionError(error)) {
+      return failPrint("The database connection failed while preparing this print job. Check Print History before retrying in case it was saved.", 503);
+    }
+    throw error;
+  } finally {
+    if (!allocatedPrintBlock && printBlockPromise) {
+      try {
+        allocatedPrintBlock = await printBlockPromise;
+      } catch {
+        // The parallel read failed before sequence allocation completed.
+      }
+    }
+    if (allocatedPrintBlock && !printBlockConsumed) {
+      try {
+        await releaseBlock(session.shop, "printjob", allocatedPrintBlock);
+      } catch {
+        // Preserve the original validation/create result; a failed release only burns a sequence number.
+      }
+    }
+    endPrintAction();
+  }
 };
 
 // Module-level caches: identical preview/barcode requests are never issued
@@ -593,7 +731,18 @@ function hideModal(id: string) {
 export default function PrintLabelsPage() {
   const loaderData = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
+  const prepareFetcher = useFetcher<typeof action>();
   const printWindowRef = useRef<Window | null>(null);
+  const printFrameSessionRef = useRef<ReturnType<typeof createPrintFrameSession>>(null);
+  const pendingOutputFormatRef = useRef<"print" | "pdf" | null>(null);
+  const pendingPrintModeRef = useRef<"in-page" | "popup" | null>(null);
+  const preparedHtmlRef = useRef<{ key: string; html: string } | null>(null);
+  const prepareRequestIdRef = useRef(0);
+  const prepareStartedAtRef = useRef(new Map<number, number>());
+  const currentPrintKeyRef = useRef("");
+  const printClickTimeRef = useRef(0);
+  const preparedWarningsRef = useRef<string[]>([]);
+  const [preparationStatus, setPreparationStatus] = useState<"preparing" | "ready" | null>(null);
 
   // ----- product list (P1 item 2: append pagination) -----
   const [products, setProducts] = useState<PrintLabelProduct[]>(
@@ -645,12 +794,19 @@ export default function PrintLabelsPage() {
 
   // ----- banners / result -----
   const [result, setResult] = useState<ActionResult | null>(null);
+  /** PRINT_IN_PAGE active only when the flag is on AND the browser is supported
+   * (Chrome/Edge/Firefox desktop). Safari and mobile keep the popup flow. */
+  const inPageOutput = loaderData.printInPage && printInPageSupported();
+  const [printFeedback, setPrintFeedback] = useState<PrintInPageFeedback | null>(null);
+  /** One in-page output attempt per job; guards effect double-runs. */
+  const handledPrintJobIds = useRef(new Set<string>());
   const busy = fetcher.state !== "idle";
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
+  useEffect(() => () => { printFrameSessionRef.current?.cancel(); }, []);
 
   // ----- print settings -----
   const initialTemplate = loaderData.templates.find((template) => template.id === loaderData.defaultTemplateId) ?? loaderData.templates[0];
@@ -702,6 +858,17 @@ export default function PrintLabelsPage() {
       ? variant.title
       : productByGid.get(variant?.productGid ?? "")?.title ?? "Variant";
   const previewSelections = [...selected].map(([gid, quantity]) => ({ gid, quantity }));
+  const currentPrintKey = JSON.stringify({
+    selection: [...selected].map(([gid, quantity]) => {
+      const variant = variantByGid.get(gid);
+      return [gid, quantity, variant?.productGid ? productByGid.get(variant.productGid)?.title : null,
+        variant?.title, variant?.sku, barcodeByGid.get(gid), variant?.price, variant?.inventoryQuantity];
+    }).sort(([a], [b]) => String(a).localeCompare(String(b))),
+    mode, sizeId, templateId, sheetMode, toggles,
+    barcodeType: previewTemplate?.barcodeType ?? loaderData.barcodeType,
+    barcodeLength: loaderData.barcodeLength,
+  });
+  currentPrintKeyRef.current = currentPrintKey;
   const previewType = (previewTemplate?.barcodeType ?? loaderData.barcodeType) as "code128" | "ean13" | "ean8";
   const invalidReasons = Object.fromEntries([...variantByGid.values()].flatMap((variant) => {
     if (!variant.barcode) return [];
@@ -1288,18 +1455,125 @@ export default function PrintLabelsPage() {
   };
 
   // ----- print + generate actions -----
+  const printForm = (intent: "print" | "prepare-print", outputFormat: "print" | "pdf" = "print", requestKey?: string, inPage = true) => {
+    const form = new FormData();
+    form.set("intent", intent);
+    if (inPage) form.set("_printInPage", "true");
+    form.set("outputFormat", outputFormat);
+    for (const [gid, qty] of selected) {
+      form.append("gids", gid);
+      form.append("qty", `${gid}=${qty}`);
+    }
+    form.set("mode", mode);
+    form.set("sizeId", sizeId);
+    form.set("templateId", templateId);
+    form.set("sheetMode", sheetMode);
+    for (const [key, value] of Object.entries(toggles)) form.set(key, String(value));
+    if (requestKey) form.set("requestKey", requestKey);
+    return form;
+  };
+
+  useEffect(() => {
+    const requestId = ++prepareRequestIdRef.current;
+    preparedHtmlRef.current = null;
+    setPreparationStatus(null);
+    if (!inPageOutput || selected.size === 0 || totalLabels <= 0 || totalLabels > DEFAULT_TOTAL_CAP) return;
+    const requestKey = printPreparationRequestKey(requestId, currentPrintKey);
+    setPreparationStatus("preparing");
+    const timer = setTimeout(() => {
+      if (currentPrintKeyRef.current !== currentPrintKey || requestId !== prepareRequestIdRef.current) return;
+      prepareStartedAtRef.current.set(requestId, performance.now());
+      debugPrintInPage("prepare request", { requestId, elapsedMs: 0 });
+      prepareFetcher.submit(printForm("prepare-print", "print", requestKey), { method: "POST" });
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [currentPrintKey, inPageOutput, selected.size, totalLabels]);
+
+  useEffect(() => {
+    if (prepareFetcher.state !== "idle" || !prepareFetcher.data?.preparePrint) return;
+    const requestId = Number(prepareFetcher.data.requestKey?.split(":", 1)[0]);
+    const startedAt = prepareStartedAtRef.current.get(requestId);
+    debugPrintInPage("prepare done", {
+      ok: prepareFetcher.data.ok,
+      prepareElapsedMs: startedAt == null ? undefined : Math.round(performance.now() - startedAt),
+    });
+    prepareStartedAtRef.current.delete(requestId);
+    if (requestId === prepareRequestIdRef.current && !prepareFetcher.data.ok) setPreparationStatus(null);
+    if (
+      !prepareFetcher.data.ok || !prepareFetcher.data.printRawHtml ||
+      requestId !== prepareRequestIdRef.current ||
+      !isCurrentPrintPreparation(prepareFetcher.data.requestKey ?? "", requestId, currentPrintKeyRef.current)
+    ) return;
+    preparedHtmlRef.current = { key: currentPrintKeyRef.current, html: prepareFetcher.data.printRawHtml };
+    setPreparationStatus("ready");
+  }, [prepareFetcher.state, prepareFetcher.data]);
+
   useEffect(() => {
     if (fetcher.state !== "idle" || !fetcher.data) return;
-    setResult(fetcher.data);
-    const destination = fetcher.data.outputFormat === "pdf" ? fetcher.data.pdfUrl : fetcher.data.printUrl;
-    if (fetcher.data.ok && destination) {
+    const output = fetcher.data;
+    const requestedOutputFormat = pendingOutputFormatRef.current;
+    const printMode = pendingPrintModeRef.current;
+    debugPrintInPage("action result", {
+      ok: output.ok,
+      outputFormat: output.outputFormat,
+      jobId: output.jobId,
+      elapsedMs: printClickTimeRef.current ? Math.round(performance.now() - printClickTimeRef.current) : undefined,
+    });
+    if (inPageOutput) {
+      if (!output.ok && requestedOutputFormat === "print" && printMode === "in-page") {
+        const failure = `Labels were printed, but no print-history record was created. ${output.message}`;
+        setResult({ ...output, message: failure });
+        setPrintFeedback({ status: "failed", message: failure });
+      } else {
+        setResult(output);
+      }
+      // The same fetcher also submits intent=generate, which carries no
+      // outputFormat and must never trigger an output attempt.
+      if (
+        output.ok && output.outputFormat && output.jobId &&
+        firstInvocationForKey(handledPrintJobIds.current, output.jobId)
+      ) {
+        if (output.outputFormat === "pdf" && output.pdfUrl) {
+          setPrintFeedback({ status: "downloading" });
+          void downloadPdfFile(output.pdfUrl).then((outcome) => {
+            setPrintFeedback(outcome.ok
+              ? { status: "done", filename: outcome.filename }
+              : { status: "failed", useFallback: outcome.useFallback, message: outcome.message });
+          });
+        } else if (output.outputFormat === "print" && printMode === "popup" && output.printUrl) {
+          const popup = printWindowRef.current;
+          if (popup && !popup.closed) popup.location.href = output.printUrl;
+          printWindowRef.current = null;
+          setPrintFeedback(null);
+        } else if (output.outputFormat === "print" && printMode === "in-page") {
+          setPrintFeedback((current) => current?.status === "dialog-opened"
+            ? current
+            : { status: "dialog-opened", warnings: preparedWarningsRef.current });
+        }
+      }
+      if (!output.ok && requestedOutputFormat === "print" && printMode !== "in-page") {
+        setPrintFeedback({ status: "failed", message: output.message });
+        printFrameSessionRef.current?.cancel();
+        printFrameSessionRef.current = null;
+        if (printWindowRef.current && !printWindowRef.current.closed) printWindowRef.current.close();
+        printWindowRef.current = null;
+      }
+      pendingOutputFormatRef.current = null;
+      pendingPrintModeRef.current = null;
+      return;
+    }
+    setResult(output);
+    const destination = output.outputFormat === "pdf" ? output.pdfUrl : output.printUrl;
+    if (output.ok && destination) {
       const printWindow = printWindowRef.current;
       if (printWindow && !printWindow.closed) printWindow.location.href = destination;
     } else if (printWindowRef.current && !printWindowRef.current.closed) {
       printWindowRef.current.close();
     }
     printWindowRef.current = null;
-  }, [fetcher.state, fetcher.data]);
+    pendingOutputFormatRef.current = null;
+    pendingPrintModeRef.current = null;
+  }, [fetcher.state, fetcher.data, inPageOutput]);
 
   useEffect(() => {
     if (barcodeFetcher.state !== "idle" || !barcodeFetcher.data || !("variantGid" in barcodeFetcher.data)) return;
@@ -1367,36 +1641,48 @@ export default function PrintLabelsPage() {
   }, [fetcher.state, fetcher.data, mode]);
 
   const submitPrint = (outputFormat: "print" | "pdf") => {
+    pendingOutputFormatRef.current = outputFormat;
+    printClickTimeRef.current = performance.now();
     setResult(null);
-    printWindowRef.current = openPrintWindow(outputFormat);
-    if (outputFormat === "print") {
-      const form = new FormData();
-      form.set("intent", "print");
-      form.set("outputFormat", outputFormat);
-      for (const [gid, qty] of selected) {
-        form.append("gids", gid);
-        form.append("qty", `${gid}=${qty}`);
+    setPrintFeedback(inPageOutput
+      ? outputFormat === "print" ? { status: "preparing" } : { status: "downloading" }
+      : null);
+    debugPrintInPage("click", { outputFormat, elapsedMs: 0 });
+    // The popup must open synchronously inside the user gesture; unsupported
+    // browsers (Safari/mobile) keep it even when PRINT_IN_PAGE is on.
+    if (!inPageOutput) printWindowRef.current = openPrintWindow(outputFormat);
+    let printMode: "in-page" | "popup" | null = null;
+    if (inPageOutput && outputFormat === "print") {
+      const prepared = preparedHtmlRef.current;
+      if (prepared?.key === currentPrintKeyRef.current) {
+        const session = createPrintFrameSession();
+        printFrameSessionRef.current = session;
+        const printed = session?.printImmediately(prepared.html, (progress) => {
+          if (progress.status === "dialog-opened") preparedWarningsRef.current = progress.warnings ?? [];
+          setPrintFeedback(progress);
+        }) ?? false;
+        if (printed) {
+          printMode = "in-page";
+        } else {
+          session?.cancel();
+          printFrameSessionRef.current = null;
+          printWindowRef.current = openPrintWindow("print");
+          printMode = "popup";
+        }
+      } else {
+        // Preparation is not ready for this exact selection/settings key. The
+        // synchronously opened popup preserves the one-click print gesture.
+        printWindowRef.current = openPrintWindow("print");
+        printMode = "popup";
       }
-      form.set("mode", mode);
-      form.set("sizeId", sizeId);
-      form.set("templateId", templateId);
-      form.set("sheetMode", sheetMode);
-      for (const [key, value] of Object.entries(toggles)) form.set(key, String(value));
+    }
+    pendingPrintModeRef.current = printMode;
+    if (outputFormat === "print") {
+      const form = printForm("print", outputFormat, undefined, inPageOutput);
       fetcher.submit(form, { method: "POST" });
       return;
     }
-    const form = new FormData();
-    form.set("intent", "print");
-    form.set("outputFormat", outputFormat);
-    for (const [gid, qty] of selected) {
-      form.append("gids", gid);
-      form.append("qty", `${gid}=${qty}`);
-    }
-    form.set("mode", mode);
-    form.set("sizeId", sizeId);
-    form.set("templateId", templateId);
-    form.set("sheetMode", sheetMode);
-    for (const [key, value] of Object.entries(toggles)) form.set(key, String(value));
+    const form = printForm("print", outputFormat, undefined, inPageOutput);
     fetcher.submit(form, { method: "POST" });
   };
 
@@ -1459,6 +1745,7 @@ export default function PrintLabelsPage() {
             <details className="bs-clear-qty"><summary><s-icon type="reset" size="small" aria-hidden="true"></s-icon>Clear Qty</summary><div className="bs-clear-qty-menu"><button type="button" onClick={() => clearQty("reset")}>Reset to 1</button><button type="button" onClick={() => clearQty("zero")}>Set to 0</button></div></details>
           </div>
           <div className="bs-print-action-group bs-print-output-actions">
+            {inPageOutput && preparationStatus === "preparing" && <small role="status">Preparing labels…</small>}
             <s-button variant="primary" onClick={() => submitPrint("print")} {...(busy ? { loading: true } : {})} {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true } : {})}>Print</s-button>
             <s-button variant="secondary" icon="download" onClick={() => submitPrint("pdf")} {...(busy || totalLabels > DEFAULT_TOTAL_CAP || totalLabels === 0 ? { disabled: true, loading: busy } : {})}>{busy ? "Preparing PDF…" : "Save PDF"}</s-button>
             <s-link href="/app/generator">Generator</s-link>
@@ -1727,10 +2014,26 @@ export default function PrintLabelsPage() {
               <s-link href="/app/print-history">Print History</s-link>
             </s-stack>
           )}
+          {inPageOutput && (
+            <PrintInPageStatus
+              feedback={printFeedback}
+              printUrl={result.outputFormat === "print" ? result.printUrl : undefined}
+              pdfUrl={result.outputFormat === "print" || printFeedback?.status === "failed" ? result.pdfUrl : undefined}
+              pdfLabel={result.outputFormat === "pdf" ? "Download PDF" : "Open PDF"}
+            />
+          )}
           <s-button variant="tertiary" onClick={() => setResult(null)}>
             Dismiss
           </s-button>
         </s-banner>
+      )}
+      {inPageOutput && printFeedback && !result && (
+        <s-banner tone={printFeedback.status === "failed" ? "critical" : "info"}>
+          <PrintInPageStatus feedback={printFeedback} />
+        </s-banner>
+      )}
+      {inPageOutput && fetcher.state !== "idle" && pendingOutputFormatRef.current === "print" && (
+        <s-banner tone="info">Saving the print-history record…</s-banner>
       )}
       {/* Sticky bottom bar */}
       {selected.size > 0 && (
@@ -1739,6 +2042,7 @@ export default function PrintLabelsPage() {
             {selected.size} selected · {totalLabels} label
             {totalLabels === 1 ? "" : "s"}
           </strong>
+          {inPageOutput && preparationStatus === "preparing" && <small role="status">Preparing labels…</small>}
           <s-button
             variant="primary"
             icon="print"

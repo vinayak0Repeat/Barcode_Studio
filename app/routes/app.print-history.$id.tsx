@@ -3,13 +3,19 @@ import type {
   LinksFunction,
   LoaderFunctionArgs,
   MetaFunction,
+  ShouldRevalidateFunctionArgs,
 } from "react-router";
+import { useEffect, useRef, useState } from "react";
 import { data, redirect, useFetcher, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { pdfUrlFor, printUrlFor } from "../services/labels/printToken.server";
+import { pdfUrlFor, printRawUrlFor, printUrlFor } from "../services/labels/printToken.server";
+import { createPrintFrameSession, debugPrintInPage, downloadPdfFile, printInPageSupported } from "../services/labels/printInPage.shared";
+import { printInPageEnabled } from "../services/labels/printInPageFlag.server";
+import { PrintInPageStatus, type PrintInPageFeedback } from "../components/PrintInPageStatus";
 import { outputUrlForKind } from "../services/printHistory.shared";
 import { issueReprintUrls } from "../services/reprint.server";
+import { prepareReprintRawDocument } from "../services/labels/reprintRaw.server";
 import { SIGNED_OUTPUT_ANCHOR_PROPS } from "../services/labels/outputAnchor.shared";
 import { PrintTargetFormButton } from "../components/PrintTargetFormButton";
 import { printWindowErrorResponse } from "../services/labels/printWindowError.server";
@@ -17,6 +23,12 @@ import adminStyles from "../styles/label-admin.css?url";
 const formatUtc = (date: Date) => new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", dateStyle: "medium", timeStyle: "short" }).format(date);
 
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: adminStyles }];
+
+export function shouldRevalidate({ formData, formMethod, defaultShouldRevalidate }: ShouldRevalidateFunctionArgs) {
+  const kind = formData?.get("kind");
+  if (formData?.get("_printInPage") === "true" && formMethod === "POST" && (kind === "print" || kind === "pdf")) return false;
+  return defaultShouldRevalidate;
+}
 
 export const meta: MetaFunction = () => [
   { title: "Print job | Barcode Studio" },
@@ -101,6 +113,7 @@ export const loader = async ({ params, request }: LoaderFunctionArgs) => {
       quantity: line.quantity,
     })),
     skipped: readSkipped(job.sizeSnap),
+    printInPage: printInPageEnabled(),
   };
 };
 
@@ -111,26 +124,101 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const jobId = String(form.get("jobId") ?? "");
   const openWindow = form.get("openWindow") === "true";
 
-  const result = await issueReprintUrls(session.shop, jobId, prisma, { print: printUrlFor, pdf: pdfUrlFor });
+  if (!openWindow && printInPageEnabled() && form.get("_printInPage") === "true" && String(form.get("kind") ?? "") === "print") {
+    const prepared = await prepareReprintRawDocument(session.shop, jobId, prisma);
+    if (!prepared) return data({ ok: false as const, message: "Print job not found." }, { status: 404 });
+    return data({
+      ok: true as const,
+      printUrl: printUrlFor(session.shop, prepared.job.id),
+      pdfUrl: pdfUrlFor(session.shop, prepared.job.id),
+      printRawUrl: printRawUrlFor(session.shop, prepared.job.id),
+      printRawHtml: prepared.html,
+    });
+  }
+
+  const result = await issueReprintUrls(session.shop, jobId, prisma, { print: printUrlFor, pdf: pdfUrlFor, printRaw: printRawUrlFor });
   if (!result.ok) {
     return openWindow
       ? printWindowErrorResponse("Print job not found.", 404)
       : data({ ok: false as const, message: "Print job not found." }, { status: 404 });
   }
   if (openWindow) return redirect(result.printUrl, { status: 303 });
-  return data(result);
+  return data({ ...result, printRawHtml: undefined });
 };
 
 export default function PrintJobDetailPage() {
   const loaderData = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
+  /** PRINT_IN_PAGE: flag on AND a supported browser (Chrome/Edge/Firefox). */
+  const inPageOutput = loaderData.printInPage && printInPageSupported();
+  const outputKindRef = useRef<"print" | "pdf">("pdf");
+  const printFrameSessionRef = useRef<ReturnType<typeof createPrintFrameSession>>(null);
+  /** Last action result already consumed (double-invocation guard). */
+  const handledDataRef = useRef<unknown>(null);
+  const [outputFeedback, setOutputFeedback] = useState<PrintInPageFeedback | null>(null);
+
+  useEffect(() => () => { printFrameSessionRef.current?.cancel(); }, []);
 
   const requestOutput = (kind: "print" | "pdf") => {
+    outputKindRef.current = kind;
+    setOutputFeedback(inPageOutput ? kind === "print" ? { status: "preparing" } : { status: "downloading" } : null);
+    debugPrintInPage("click", { kind, jobId: loaderData.job.id });
+    if (kind === "print") printFrameSessionRef.current = createPrintFrameSession();
     const form = new FormData();
     form.set("jobId", loaderData.job.id);
     form.set("kind", kind);
+    if (inPageOutput) form.set("_printInPage", "true");
     fetcher.submit(form, { method: "POST" });
   };
+
+  // PRINT_IN_PAGE output: Reprint prints in the hidden frame, Open PDF
+  // downloads directly. The flag-off paths (form POST + redirect for Reprint,
+  // banner link for PDF) stay exactly as they were.
+  useEffect(() => {
+    if (!inPageOutput || fetcher.state !== "idle" || !fetcher.data) return;
+    if (handledDataRef.current === fetcher.data) return;
+    handledDataRef.current = fetcher.data;
+    debugPrintInPage("action result", { ok: fetcher.data.ok, kind: outputKindRef.current, elapsedMs: printFrameSessionRef.current?.elapsedMs() });
+    if (!fetcher.data.ok) {
+      printFrameSessionRef.current?.cancel();
+      printFrameSessionRef.current = null;
+      setOutputFeedback({ status: "failed", message: fetcher.data.message ?? "Output request failed." });
+      return;
+    }
+    if (outputKindRef.current === "print" && (fetcher.data.printRawHtml || fetcher.data.printRawUrl)) {
+      setOutputFeedback({ status: "loading" });
+      const session = printFrameSessionRef.current;
+      if (!session) {
+        setOutputFeedback({ status: "failed", useFallback: false, message: "The print frame could not be created. Use the print page link below." });
+        return;
+      }
+      const prepareOutput = fetcher.data.printRawHtml
+        ? session.prepareHtml(fetcher.data.printRawHtml, (progress) => {
+            if (printFrameSessionRef.current === session) setOutputFeedback(progress);
+          })
+        : session.prepare(fetcher.data.printRawUrl!, (progress) => {
+        if (printFrameSessionRef.current === session) setOutputFeedback(progress);
+          });
+      void prepareOutput.then((outcome) => {
+        if (printFrameSessionRef.current !== session) return;
+        if (!outcome.ok) setOutputFeedback({ status: "failed", useFallback: outcome.useFallback, message: outcome.message });
+      });
+    } else if (outputKindRef.current === "pdf" && fetcher.data.pdfUrl) {
+      setOutputFeedback({ status: "downloading" });
+      void downloadPdfFile(fetcher.data.pdfUrl).then((outcome) => {
+        setOutputFeedback(outcome.ok
+          ? { status: "done", filename: outcome.filename }
+          : { status: "failed", useFallback: outcome.useFallback, message: outcome.message });
+      });
+    }
+  }, [fetcher.state, fetcher.data, inPageOutput]);
+
+  useEffect(() => {
+    if (fetcher.state === "idle" && fetcher.data && !fetcher.data.ok) {
+      printFrameSessionRef.current?.cancel();
+      printFrameSessionRef.current = null;
+    }
+  }, [fetcher.state, fetcher.data]);
 
   const job = loaderData.job;
 
@@ -160,9 +248,19 @@ export default function PrintJobDetailPage() {
           </s-list-item>
         </s-unordered-list>
         <s-stack direction="inline" gap="base">
-          <PrintTargetFormButton action={`/app/print-history/${job.id}`} jobId={job.id} variant="primary">
-            Reprint
-          </PrintTargetFormButton>
+          {inPageOutput ? (
+            <s-button
+              variant="primary"
+              onClick={() => requestOutput("print")}
+              {...(fetcher.state !== "idle" ? { loading: true, disabled: true } : {})}
+            >
+              {fetcher.state !== "idle" ? "Preparing print…" : "Reprint"}
+            </s-button>
+          ) : (
+            <PrintTargetFormButton action={`/app/print-history/${job.id}`} jobId={job.id} variant="primary">
+              Reprint
+            </PrintTargetFormButton>
+          )}
           <s-button variant="secondary" onClick={() => requestOutput("pdf")} {...(fetcher.state !== "idle" ? { loading: true, disabled: true } : {})}>
             {fetcher.state !== "idle" ? "Preparing PDF…" : "Open PDF"}
           </s-button>
@@ -216,9 +314,20 @@ export default function PrintJobDetailPage() {
 
       {fetcher.data?.ok && (
         <s-banner tone="success">
-          PDF ready: {" "}
+          {inPageOutput && outputKindRef.current === "print" ? "Output ready:" : "PDF ready:"} {" "}
           <a href={fetcher.data.pdfUrl} {...SIGNED_OUTPUT_ANCHOR_PROPS}>Open PDF</a>
           {" "}<s-link href="/app/print-history">Print History</s-link>
+          {inPageOutput && (
+            <PrintInPageStatus feedback={outputFeedback} printUrl={fetcher.data.printUrl} pdfUrl={fetcher.data.pdfUrl} />
+          )}
+        </s-banner>
+      )}
+      {fetcher.data && !fetcher.data.ok && !inPageOutput && (
+        <s-banner tone="critical">{fetcher.data.message}</s-banner>
+      )}
+      {inPageOutput && outputFeedback && !fetcher.data?.ok && (
+        <s-banner tone={outputFeedback.status === "failed" ? "critical" : "info"}>
+          <PrintInPageStatus feedback={outputFeedback} />
         </s-banner>
       )}
       </main>
