@@ -266,12 +266,23 @@ s-page:has(.bs-generator-layout) {
 }
 :is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-header-row,
 :is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-row {
+  /* Column widths come from GENERATOR_TABLE_COLUMNS
+     (app/services/generatorTable.shared.ts), rendered as a <style> block by
+     both generator pages so the header row and every data row share ONE
+     definition. The declaration that used to live here ended in a
+     content-sized `auto` Actions track, which let every row resolve its own
+     column widths — the columns did not line up between rows or the header. */
   display: grid !important;
-  grid-template-columns: 40px minmax(220px, 2fr) minmax(110px, 1fr) minmax(100px, 1fr) minmax(150px, 1.4fr) 110px 90px 70px auto !important;
   align-items: center !important;
   gap: 10px;
   width: 100% !important;
-  min-width: 1120px;
+  /* Floor = the sum of the track minimums in GENERATOR_TABLE_COLUMNS
+     (1170px) + 8 gaps (80px) + the row's own horizontal padding (28px).
+     Below it the grid would overflow its row box, so the row keeps this
+     width and the table scrolls horizontally inside its wrapper instead
+     (the existing narrow-screen behavior). Keep in sync with the shared
+     column definition. */
+  min-width: 1278px;
   box-sizing: border-box;
 }
 :is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-header-row {
@@ -287,7 +298,11 @@ s-page:has(.bs-generator-layout) {
 :is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-body { display: block !important; }
 :is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-row {
   position: static !important;
-  height: 64px;
+  /* No fixed height: the row grows with its content (min-height unchanged)
+     so taller content can never paint over the next row. Cells keep
+     height:100% + align-items:center, so every cell stays vertically
+     centered exactly as before, and the row background (including the
+     selected-row highlight) covers the full grown height. */
   min-height: 64px;
   padding: 8px 14px;
   background: transparent;
@@ -356,6 +371,20 @@ s-page:has(.bs-generator-layout) {
 }
 :is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-cell:nth-child(9) s-button {
   flex: 0 0 auto;
+  white-space: nowrap;
+}
+/* Actions row (Barcode Generator: Preview + Edit + Generate). A plain div,
+   not s-stack: Polaris documents that inline s-stack content "will wrap"
+   (StackProps.direction in @shopify/polaris-types), and the wrap happens
+   inside the component's shadow DOM where page CSS cannot reach — the
+   host-level flex-flow rules above cannot disable it. The buttons must
+   share ONE line at every width, so this row is ours (same in-cell
+   pattern as .bs-generator-product-cell above). */
+.bs-generator-actions {
+  display: flex;
+  flex-flow: row nowrap;
+  align-items: center;
+  gap: 8px;
   white-space: nowrap;
 }
 :is(.bs-generator-barcode, .bs-generator-sku) > s-section:nth-of-type(2) s-table-row:has(s-table-cell:only-child) {

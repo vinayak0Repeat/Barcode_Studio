@@ -8,6 +8,7 @@ import type {
 import { data, useFetcher, useLoaderData, useRevalidator, useSearchParams } from "react-router";
 import { authenticate } from "../shopify.server";
 import generatorStyles from "../styles/generator-pages.css?url";
+import { generatorTableGridCss } from "../services/generatorTable.shared";
 import prisma from "../db.server";
 import { matchesQuery } from "../services/catalog/map.server";
 import { variantIndexRows, variantRowsByGid } from "../services/catalog/search.server";
@@ -335,6 +336,10 @@ export default function SkuGeneratorPage() {
           </s-banner>
         )}
 
+        {/* Column widths and alignments come from ONE shared definition so the
+            header row and every data row cannot drift apart
+            (app/services/generatorTable.shared.ts). */}
+        <style>{generatorTableGridCss("bs-generator-sku")}</style>
         <s-table>
           <s-table-header-row>
             <s-table-header>Select</s-table-header>

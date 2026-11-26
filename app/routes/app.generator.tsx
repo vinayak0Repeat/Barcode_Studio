@@ -8,6 +8,7 @@ import type {
 import { data, useFetcher, useLoaderData, useRevalidator, useSearchParams } from "react-router";
 import { authenticate } from "../shopify.server";
 import generatorStyles from "../styles/generator-pages.css?url";
+import { generatorTableGridCss } from "../services/generatorTable.shared";
 import prisma from "../db.server";
 import { matchesQuery } from "../services/catalog/map.server";
 import { variantIndexRows, variantRowsByGid } from "../services/catalog/search.server";
@@ -438,6 +439,10 @@ export default function GeneratorPage() {
           </s-box>
         )}
 
+        {/* Column widths and alignments come from ONE shared definition so the
+            header row and every data row cannot drift apart
+            (app/services/generatorTable.shared.ts). */}
+        <style>{generatorTableGridCss("bs-generator-barcode")}</style>
         <s-table>
           <s-table-header-row>
             <s-table-header>
@@ -519,7 +524,14 @@ export default function GeneratorPage() {
                 <s-table-cell>{row.price ?? "—"}</s-table-cell>
                 <s-table-cell>{row.inventoryQuantity ?? "—"}</s-table-cell>
                 <s-table-cell>
-                  <s-stack direction="inline" gap="base">
+                  {/* Plain nowrap flex row, not s-stack: Polaris documents that
+                      an inline s-stack's content "will wrap"
+                      (StackProps.direction in @shopify/polaris-types) and the
+                      wrap happens inside the component where page CSS cannot
+                      reach. Preview + Edit + Generate must share ONE line at
+                      every width. Same in-cell pattern as
+                      .bs-generator-product-cell. */}
+                  <div className="bs-generator-actions">
                     <s-button
                       variant="tertiary"
                       onClick={() => row.barcode && openPreview(row.barcode, `${row.productTitle ?? ""} ${row.variantTitle ?? ""}`.trim())}
@@ -539,7 +551,7 @@ export default function GeneratorPage() {
                         Generate
                       </s-button>
                     )}
-                  </s-stack>
+                  </div>
                 </s-table-cell>
               </s-table-row>
             ))}
